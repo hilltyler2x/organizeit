@@ -1,0 +1,84 @@
+import type Anthropic from "@anthropic-ai/sdk";
+import { describe, expect, it } from "vitest";
+import { createApp } from "../server/index";
+
+// Fake Anthropic client that replays canned JSON answers and records requests.
+function fakeClient(answers: object[]) {
+  const calls: any[] = [];
+  const client = {
+    beta: {
+      messages: {
+        create: async (params: any) => {
+          calls.push(structuredClone(params));
+          const answer = answers.shift();
+          return { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(answer) }] };
+        },
+      },
+    },
+  } as unknown as Anthropic;
+  return { client, calls };
+}
+
+async function post(app: ReturnType<typeof createApp>, body: object) {
+  const server = app.listen(0);
+  const port = (server.address() as { port: number }).port;
+  try {
+    const r = await fetch(`http://localhost:${port}/api/classify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return { status: r.status, body: await r.json() };
+  } finally {
+    server.close();
+  }
+}
+
+const req = { image: "aGVsbG8=", mediaType: "image/jpeg", fileName: "IMG_1.jpg", width: 1170, height: 2532, categories: [{ section: "products", name: "Bags" }] };
+
+describe("POST /api/classify", () => {
+  it("returns the classification", async () => {
+    const { client, calls } = fakeClient([{ section: "business", category: "Receipts", label: "Target receipt", confidence: 0.93 }]);
+    const r = await post(createApp(client), req);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ section: "business", category: "Receipts", label: "Target receipt", confidence: 0.93 });
+    expect(calls[0].model).toBe("claude-opus-5-5");
+    expect(calls[0].output_config.format.type).toBe("json_schema");
+  });
+
+  it("re-asks once when the AI answers with a catch-all", async () => {
+    const { client, calls } = fakeClient([
+      { section: "products", category: "Other", label: "thing", confidence: 0.3 },
+      { section: "products", category: "Sunglasses", label: "aviator sunglasses", confidence: 0.8 },
+    ]);
+    const r = await post(createApp(client), req);
+    expect(r.body.category).toBe("Sunglasses");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].messages.at(-1).content).toMatch(/catch-all/);
+  });
+
+  it("uses the item description when the AI insists on a catch-all", async () => {
+    const { client } = fakeClient([{ section: "products", category: "Misc", label: "phone case", confidence: 0.6 }]);
+    const r = await post(createApp(client), req);
+    expect(r.body.category).toBe("Phone Cases");
+  });
+
+  it("fails rather than filing into a catch-all", async () => {
+    const { client } = fakeClient([
+      { section: "products", category: "Other", label: "unknown item", confidence: 0.1 },
+      { section: "products", category: "Uncategorized", label: "misc", confidence: 0.1 },
+    ]);
+    const r = await post(createApp(client), req);
+    expect(r.status).toBe(422);
+  });
+
+  it("explains when no API key is configured", async () => {
+    const r = await post(createApp(null), req);
+    expect(r.status).toBe(503);
+  });
+
+  it("rejects malformed requests", async () => {
+    const { client } = fakeClient([]);
+    expect((await post(createApp(client), { image: "" })).status).toBe(400);
+  });
+});

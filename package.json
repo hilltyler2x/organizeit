@@ -1,0 +1,36 @@
+{
+  "name": "organizeit",
+  "version": "1.0.0",
+  "description": "Sort your camera roll: business expenses and product photos by exact item type.",
+  "scripts": {
+    "dev": "concurrently -n api,web \"tsx watch --env-file-if-exists=.env server/index.ts\" \"vite\"",
+    "build": "tsc && vite build",
+    "start": "tsx --env-file-if-exists=.env server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
+    "express": "^5.3.0",
+    "idb": "^8.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "fake-indexeddb": "^6.2.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "type": "module",
+  "private": true
+}

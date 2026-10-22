@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import { applyClassification, movePhotos, removePhotos, renameCategory, type Change, type LibraryState } from "../core/library";
 import type { Photo, Section } from "../core/types";
-import { ApiError, aiAvailable, classify } from "./api";
+import { ApiError, classify, hasPasscode, serverStatus, unlock } from "./api";
 import * as store from "./db";
 import { blobToBase64, decode, resize } from "./image";
 import type { PickedPhoto } from "./photoSource";
@@ -14,6 +14,7 @@ export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
   const [ready, setReady] = useState(false);
   const [ai, setAi] = useState<boolean | null>(null);
+  const [locked, setLocked] = useState(false);
   const stateRef = useRef(state);
   const running = useRef(new Set<string>());
   const attempts = useRef(new Map<string, number>());
@@ -56,7 +57,10 @@ export function useLibrary() {
       setState(stateRef.current);
       setReady(true);
     })();
-    aiAvailable().then(setAi);
+    serverStatus().then((s) => {
+      setAi(s.ai);
+      setLocked(s.passcodeRequired && !hasPasscode());
+    });
   }, []);
 
   const classifyOne = useCallback(async (photo: Photo) => {
@@ -77,6 +81,12 @@ export function useLibrary() {
       });
       await commit(applyClassification(stateRef.current, photo.id, result, newId));
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Wrong or missing passcode: wait in the queue until it is entered.
+        setLocked(true);
+        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        return;
+      }
       const tries = (attempts.current.get(photo.id) ?? 0) + 1;
       attempts.current.set(photo.id, tries);
       const retryable = err instanceof ApiError && err.retryable && tries < 4;
@@ -91,7 +101,7 @@ export function useLibrary() {
 
   // Work through the queue a few photos at a time.
   const pump = useCallback(() => {
-    if (!ai) return;
+    if (!ai || locked) return;
     const queued = stateRef.current.photos.filter((p) => p.status === "queued" && !running.current.has(p.id));
     for (const photo of queued.slice(0, CONCURRENCY - running.current.size)) {
       running.current.add(photo.id);
@@ -100,7 +110,7 @@ export function useLibrary() {
         pump();
       });
     }
-  }, [ai, classifyOne]);
+  }, [ai, locked, classifyOne]);
 
   useEffect(() => {
     if (ready) pump();
@@ -145,6 +155,12 @@ export function useLibrary() {
     ...state,
     ready,
     ai,
+    locked,
+    unlock: async (code: string) => {
+      const ok = await unlock(code);
+      if (ok) setLocked(false);
+      return ok;
+    },
     importPhotos,
     retry,
     move: (ids: string[], target: { categoryId: string } | { section: Section; name: string }) =>

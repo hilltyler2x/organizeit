@@ -119,6 +119,8 @@ main { padding: 24px 24px 120px; min-width: 0; }
 
 .queue { margin-bottom: 20px; }
 .queue-row { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
+.queue-row.passcode { flex-direction: column; align-items: stretch; margin-bottom: 10px; }
+.queue-row.passcode p { margin: 0; }
 .queue-failed { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; margin-top: 10px; }
 .queue-failed p { margin-top: 0; }
 .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }

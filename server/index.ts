@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import express from "express";
+import express, { type RequestHandler } from "express";
+import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClassifyError, ClassifyRequest, classifyPhoto } from "./classify";
@@ -7,15 +8,52 @@ import { ClassifyError, ClassifyRequest, classifyPhoto } from "./classify";
 // Small API server. The Anthropic key stays here so neither the website nor a future
 // iOS/Android build ever ships it.
 
-export function createApp(client: Anthropic | null) {
+function sameSecret(a: string, b: string) {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+// When APP_PASSCODE is set (always, for a public deployment), only people with the
+// passcode can spend the server's Anthropic credits.
+function requirePasscode(passcode: string | undefined): RequestHandler {
+  return (req, res, next) => {
+    if (!passcode || sameSecret(String(req.get("x-organizeit-passcode") ?? ""), passcode)) return next();
+    res.status(401).json({ error: "Enter the OrganizeIt passcode to sort photos." });
+  };
+}
+
+// Simple per-IP cap so a leaked passcode can't run up a large bill.
+function rateLimit(perHour: number): RequestHandler {
+  const hits = new Map<string, { start: number; count: number }>();
+  return (req, res, next) => {
+    const key = req.ip ?? "unknown";
+    const now = Date.now();
+    const h = hits.get(key);
+    if (!h || now - h.start > 3_600_000) {
+      hits.set(key, { start: now, count: 1 });
+      return next();
+    }
+    if (++h.count <= perHour) return next();
+    res.status(429).json({ error: "Hourly sorting limit reached. Try again later." });
+  };
+}
+
+export function createApp(client: Anthropic | null, options: { passcode?: string; perHour?: number } = {}) {
   const app = express();
+  app.set("trust proxy", 1);
   app.use(express.json({ limit: "15mb" }));
+  const gate = requirePasscode(options.passcode || undefined);
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, ai: client !== null });
+    res.json({ ok: true, ai: client !== null, passcodeRequired: Boolean(options.passcode) });
   });
 
-  app.post("/api/classify", async (req, res) => {
+  app.post("/api/unlock", gate, (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  app.post("/api/classify", gate, rateLimit(options.perHour ?? 2000), async (req, res) => {
     if (!client) {
       res.status(503).json({ error: "AI sorting is not set up. Add ANTHROPIC_API_KEY to the server's environment." });
       return;
@@ -49,12 +87,16 @@ export function createApp(client: Anthropic | null) {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  const app = createApp(hasKey ? new Anthropic() : null);
+  const app = createApp(hasKey ? new Anthropic() : null, {
+    passcode: process.env.APP_PASSCODE,
+    perHour: Number(process.env.SORTS_PER_HOUR ?? 2000),
+  });
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist");
   app.use(express.static(dist));
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
   const port = Number(process.env.PORT ?? 8787);
   app.listen(port, () => {
     console.log(`OrganizeIt API on http://localhost:${port}${hasKey ? "" : " (no ANTHROPIC_API_KEY: AI sorting disabled)"}`);
+    if (!process.env.APP_PASSCODE) console.log("APP_PASSCODE is not set: anyone who can reach this server can use the AI.");
   });
 }

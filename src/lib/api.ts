@@ -13,13 +13,44 @@ export class ApiError extends Error {
   }
 }
 
-export async function aiAvailable(): Promise<boolean> {
+const PASSCODE_KEY = "organizeit.passcode";
+
+let passcode = (() => {
+  try {
+    return localStorage.getItem(PASSCODE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+})();
+
+export function hasPasscode() {
+  return passcode !== "";
+}
+
+export async function serverStatus(): Promise<{ ai: boolean; passcodeRequired: boolean }> {
   try {
     const r = await fetch(`${API}/api/health`);
-    return r.ok && (await r.json()).ai === true;
+    const body = await r.json();
+    return { ai: r.ok && body.ai === true, passcodeRequired: body.passcodeRequired === true };
   } catch {
-    return false;
+    return { ai: false, passcodeRequired: false };
   }
+}
+
+/** Checks a passcode with the server and remembers it on this device if it works. */
+export async function unlock(candidate: string): Promise<boolean> {
+  const r = await fetch(`${API}/api/unlock`, {
+    method: "POST",
+    headers: { "x-organizeit-passcode": candidate },
+  });
+  if (!r.ok) return false;
+  passcode = candidate;
+  try {
+    localStorage.setItem(PASSCODE_KEY, candidate);
+  } catch {
+    // Private browsing: remembered for this visit only.
+  }
+  return true;
 }
 
 export async function classify(input: {
@@ -34,7 +65,7 @@ export async function classify(input: {
   try {
     r = await fetch(`${API}/api/classify`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-organizeit-passcode": passcode },
       body: JSON.stringify({
         ...input,
         categories: input.categories.map((c) => ({ section: c.section, name: c.name })),

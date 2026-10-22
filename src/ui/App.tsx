@@ -159,10 +159,11 @@ function QueuePanel({ lib }: { lib: Library }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
   const failed = lib.photos.filter((p) => p.status === "error");
   const [fixing, setFixing] = useState<Photo[] | null>(null);
-  if (!pending.length && !failed.length && lib.ai !== false) return null;
+  if (!pending.length && !failed.length && lib.ai !== false && !lib.locked) return null;
 
   return (
     <div className="queue">
+      {lib.locked && lib.ai !== false && <PasscodeForm lib={lib} />}
       {lib.ai === false && (
         <p className="error banner">
           AI sorting isn't connected. Start the server with an ANTHROPIC_API_KEY to sort photos; anything you add waits here until then.
@@ -170,7 +171,7 @@ function QueuePanel({ lib }: { lib: Library }) {
       )}
       {pending.length > 0 && (
         <div className="queue-row">
-          <span className={lib.ai ? "spinner" : ""} aria-hidden />
+          <span className={lib.ai && !lib.locked ? "spinner" : ""} aria-hidden />
           <strong>Sorting {pending.length} photo{pending.length === 1 ? "" : "s"}…</strong>
         </div>
       )}
@@ -205,5 +206,30 @@ function QueuePanel({ lib }: { lib: Library }) {
         />
       )}
     </div>
+  );
+}
+
+function PasscodeForm({ lib }: { lib: Library }) {
+  const [code, setCode] = useState("");
+  const [state, setState] = useState<"idle" | "checking" | "wrong">("idle");
+  return (
+    <form
+      className="queue-row passcode"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setState("checking");
+        setState((await lib.unlock(code.trim()).catch(() => false)) ? "idle" : "wrong");
+      }}
+    >
+      <label htmlFor="passcode">
+        <strong>Enter your passcode to start sorting.</strong>
+        <span className="muted small"> You only need to do this once on each device.</span>
+      </label>
+      <div className="row">
+        <input id="passcode" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" />
+        <button className="primary" type="submit" disabled={!code.trim() || state === "checking"}>Unlock</button>
+      </div>
+      {state === "wrong" && <p className="error small">That passcode didn't work.</p>}
+    </form>
   );
 }

@@ -105,3 +105,21 @@ describe("POST /api/classify", () => {
     expect((await post(app, req)).status).toBe(429);
   });
 });
+
+describe("CORS for the phone app", () => {
+  it("lets the app's web view call the API, and nobody else", async () => {
+    const app = createApp(null);
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    try {
+      const pre = await fetch(`http://localhost:${port}/api/classify`, { method: "OPTIONS", headers: { origin: "capacitor://localhost" } });
+      expect(pre.status).toBe(204);
+      expect(pre.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
+      expect(pre.headers.get("access-control-allow-headers")).toContain("x-organizeit-passcode");
+      const other = await fetch(`http://localhost:${port}/api/health`, { headers: { origin: "https://evil.example" } });
+      expect(other.headers.get("access-control-allow-origin")).toBeNull();
+    } finally {
+      server.close();
+    }
+  });
+});

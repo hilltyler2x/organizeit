@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OrganizeIt</string>
+    <string name="title_activity_main">OrganizeIt</string>
+    <string name="package_name">com.organizeit.app</string>
+    <string name="custom_url_scheme">com.organizeit.app</string>
+</resources>

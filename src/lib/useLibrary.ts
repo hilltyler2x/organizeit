@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
-import { applyClassification, movePhotos, removePhotos, renameCategory, type Change, type LibraryState } from "../core/library";
+import {
+  applyClassification,
+  movePhotos,
+  removePhotos,
+  renameCategory,
+  syncWithDevice,
+  type Change,
+  type LibraryState,
+} from "../core/library";
 import type { Photo, Section } from "../core/types";
 import { ApiError, classify, hasPasscode, serverStatus, unlock } from "./api";
 import * as store from "./db";
-import { blobToBase64, decode, resize } from "./image";
+import { decode, resize } from "./image";
+import { classifierImage } from "./media";
+import { PhotoLibrary, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
 import type { PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
+// Optional cap while testing: only the newest N photos on the phone are sorted.
+export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 const CONCURRENCY = 3;
 
 export function useLibrary() {
@@ -15,6 +27,9 @@ export function useLibrary() {
   const [ready, setReady] = useState(false);
   const [ai, setAi] = useState<boolean | null>(null);
   const [locked, setLocked] = useState(false);
+  // Inside the iOS/Android app: photo library permission and scan progress.
+  const [permission, setPermission] = useState<PermissionStatus | null>(null);
+  const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const stateRef = useRef(state);
   const running = useRef(new Set<string>());
   const attempts = useRef(new Map<string, number>());
@@ -66,17 +81,13 @@ export function useLibrary() {
   const classifyOne = useCallback(async (photo: Photo) => {
     await patchPhoto(photo.id, { status: "classifying", error: undefined });
     try {
-      const blobs = await store.getBlobs(photo.id);
-      if (!blobs) throw new Error("Photo data is missing.");
-      const { bitmap } = await decode(blobs.original);
-      const small = await resize(bitmap, 1024, 0.8);
-      bitmap.close();
       const result = await classify({
-        image: await blobToBase64(small),
+        image: await classifierImage(photo),
         mediaType: "image/jpeg",
         fileName: photo.fileName,
         width: photo.width,
         height: photo.height,
+        isScreenshot: photo.isScreenshot ?? false,
         categories: stateRef.current.categories,
       });
       await commit(applyClassification(stateRef.current, photo.id, result, newId));
@@ -99,11 +110,15 @@ export function useLibrary() {
     }
   }, [commit, patchPhoto]);
 
-  // Work through the queue a few photos at a time.
+  // Work through the queue a few photos at a time, newest first.
   const pump = useCallback(() => {
     if (!ai || locked) return;
-    const queued = stateRef.current.photos.filter((p) => p.status === "queued" && !running.current.has(p.id));
-    for (const photo of queued.slice(0, CONCURRENCY - running.current.size)) {
+    const free = CONCURRENCY - running.current.size;
+    if (free <= 0) return;
+    const queued = stateRef.current.photos
+      .filter((p) => p.status === "queued" && !running.current.has(p.id))
+      .sort((a, b) => b.takenAt - a.takenAt);
+    for (const photo of queued.slice(0, free)) {
       running.current.add(photo.id);
       classifyOne(photo).finally(() => {
         running.current.delete(photo.id);
@@ -115,6 +130,58 @@ export function useLibrary() {
   useEffect(() => {
     if (ready) pump();
   }, [ready, pump, state]);
+
+  // Reads the phone's whole library and queues anything new. Runs on launch and whenever
+  // the app comes back to the foreground.
+  const scanning = useRef(false);
+  const scanDevice = useCallback(async () => {
+    if (!isNativeApp || scanning.current) return;
+    scanning.current = true;
+    try {
+      const { status } = await PhotoLibrary.checkPermission();
+      setPermission(status);
+      if (status !== "granted" && status !== "limited") return;
+      setScan({ done: 0, total: 0 });
+      let assets = await listAllAssets((done, total) => setScan({ done, total }));
+      if (SORT_LIMIT) assets = assets.sort((a, b) => b.createdAt - a.createdAt).slice(0, SORT_LIMIT);
+      await commit(syncWithDevice(stateRef.current, assets, newId));
+    } finally {
+      setScan(null);
+      scanning.current = false;
+    }
+  }, [commit]);
+
+  useEffect(() => {
+    if (!ready || !isNativeApp) return;
+    scanDevice();
+    const onVisible = () => document.visibilityState === "visible" && scanDevice();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [ready, scanDevice]);
+
+  const connectLibrary = useCallback(async () => {
+    const { status } = await PhotoLibrary.requestPermission();
+    setPermission(status);
+    if (status === "granted" || status === "limited") await scanDevice();
+    else if (status === "denied") await PhotoLibrary.openSettings();
+  }, [scanDevice]);
+
+  /**
+   * Deletes photos. Photos from the phone's library are deleted from the phone too (the
+   * system asks to confirm); returns false if the person cancels.
+   */
+  const remove = useCallback(async (ids: string[]) => {
+    const idSet = new Set(ids);
+    const assetIds = stateRef.current.photos
+      .filter((p) => idSet.has(p.id) && p.source.kind === "native")
+      .map((p) => (p.source as { assetId: string }).assetId);
+    if (assetIds.length) {
+      const { deleted } = await PhotoLibrary.deleteAssets({ ids: assetIds });
+      if (!deleted) return false;
+    }
+    await commit(removePhotos(stateRef.current, ids));
+    return true;
+  }, [commit]);
 
   const importPhotos = useCallback(async (picked: PickedPhoto[]) => {
     for (const item of picked) {
@@ -156,6 +223,11 @@ export function useLibrary() {
     ready,
     ai,
     locked,
+    native: isNativeApp,
+    permission,
+    scan,
+    connectLibrary,
+    openSettings: () => PhotoLibrary.openSettings(),
     unlock: async (code: string) => {
       const ok = await unlock(code);
       if (ok) setLocked(false);
@@ -165,7 +237,7 @@ export function useLibrary() {
     retry,
     move: (ids: string[], target: { categoryId: string } | { section: Section; name: string }) =>
       commit(movePhotos(stateRef.current, ids, target, newId)),
-    remove: (ids: string[]) => commit(removePhotos(stateRef.current, ids)),
+    remove,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };
 }

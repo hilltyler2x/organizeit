@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { getBlobs } from "../lib/db";
+import type { Photo } from "../core/types";
+import { fullImage, thumbnail } from "../lib/media";
 
 // Object URLs for stored images, cached for the session.
 const cache = new Map<string, { thumb?: string; full?: string }>();
 
-export function useImageUrl(id: string, kind: "thumb" | "full") {
+export function useImageUrl(photo: Photo, kind: "thumb" | "full") {
+  const id = photo.id;
   const [url, setUrl] = useState(() => cache.get(id)?.[kind]);
   useEffect(() => {
     if (cache.get(id)?.[kind]) {
@@ -12,13 +14,15 @@ export function useImageUrl(id: string, kind: "thumb" | "full") {
       return;
     }
     let live = true;
-    getBlobs(id).then((b) => {
-      if (!b || !live) return;
-      const entry = cache.get(id) ?? {};
-      entry[kind] = URL.createObjectURL(kind === "thumb" ? b.thumb : b.original);
-      cache.set(id, entry);
-      setUrl(entry[kind]);
-    });
+    (kind === "thumb" ? thumbnail(photo) : fullImage(photo))
+      .then((blob) => {
+        if (!blob || !live) return;
+        const entry = cache.get(id) ?? {};
+        entry[kind] = URL.createObjectURL(blob);
+        cache.set(id, entry);
+        setUrl(entry[kind]);
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -35,7 +39,7 @@ export function forgetImages(ids: string[]) {
   }
 }
 
-export function Thumb({ id, alt }: { id: string; alt: string }) {
-  const url = useImageUrl(id, "thumb");
+export function Thumb({ photo, alt }: { photo: Photo; alt: string }) {
+  const url = useImageUrl(photo, "thumb");
   return url ? <img src={url} alt={alt} loading="lazy" draggable={false} /> : <div className="thumb-placeholder" />;
 }

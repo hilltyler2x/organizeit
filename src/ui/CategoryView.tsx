@@ -51,10 +51,11 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
 
   const deleteSelected = () => {
     const ids = [...selected];
-    if (!confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(selectedBytes)}) from OrganizeIt?`)) return;
+    // In the app the phone shows its own delete confirmation.
+    if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(selectedBytes)}) from OrganizeIt?`)) return;
     run(async () => {
       const lastOnes = ids.length === photos.length && !category.seeded;
-      await lib.remove(ids);
+      if (!(await lib.remove(ids))) return;
       forgetImages(ids);
       setSelected(new Set());
       setSelecting(false);
@@ -121,7 +122,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
                 aria-label={p.label ?? p.fileName}
                 onClick={() => (selecting ? toggle(p.id) : setViewing(p))}
               >
-                <Thumb id={p.id} alt={p.label ?? p.fileName} />
+                <Thumb photo={p} alt={p.label ?? p.fileName} />
                 {selecting && <span className="check" aria-hidden>{selected.has(p.id) ? "✓" : ""}</span>}
                 {p.label && <span className="caption">{p.label}</span>}
               </button>

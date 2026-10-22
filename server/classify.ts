@@ -11,6 +11,7 @@ export const ClassifyRequest = z.object({
   fileName: z.string().max(300).default(""),
   width: z.number().int().nonnegative().default(0),
   height: z.number().int().nonnegative().default(0),
+  isScreenshot: z.boolean().default(false),
   categories: z
     .array(z.object({ section: z.enum(["business", "products", "personal"]), name: z.string().max(80) }))
     .max(500),
@@ -63,6 +64,7 @@ function hints(req: ClassifyRequest): string {
   const parts: string[] = [];
   if (req.fileName) parts.push(`File name: ${req.fileName}`);
   if (req.width && req.height) parts.push(`Original size: ${req.width}x${req.height}`);
+  if (req.isScreenshot) parts.push("The phone marked this photo as a screenshot.");
   return parts.join("\n");
 }
 

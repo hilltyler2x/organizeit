@@ -39,9 +39,29 @@ function rateLimit(perHour: number): RequestHandler {
   };
 }
 
+// The iOS/Android app runs from these origins inside its web view and calls this API.
+const APP_ORIGINS = new Set(["capacitor://localhost", "https://localhost", "http://localhost"]);
+
+const allowApp: RequestHandler = (req, res, next) => {
+  const origin = req.get("origin");
+  if (origin && APP_ORIGINS.has(origin)) {
+    res.set("Access-Control-Allow-Origin", origin);
+    res.set("Vary", "Origin");
+    res.set("Access-Control-Allow-Headers", "content-type, x-organizeit-passcode");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Max-Age", "86400");
+  }
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+};
+
 export function createApp(client: Anthropic | null, options: { passcode?: string; perHour?: number } = {}) {
   const app = express();
   app.set("trust proxy", 1);
+  app.use("/api", allowApp);
   app.use(express.json({ limit: "15mb" }));
   const gate = requirePasscode(options.passcode || undefined);
 

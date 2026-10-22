@@ -7,7 +7,7 @@ import { forgetImages, useImageUrl } from "./Thumb";
 
 export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Category; onClose: () => void; onEmptied: () => void }) {
   const { lib, photo } = props;
-  const url = useImageUrl(photo.id, "full");
+  const url = useImageUrl(photo, "full");
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
 
@@ -31,8 +31,8 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
             <button
               className="danger"
               onClick={async () => {
-                if (!confirm("Delete this photo from OrganizeIt?")) return;
-                await lib.remove([photo.id]);
+                if (!lib.native && !confirm("Delete this photo from OrganizeIt?")) return;
+                if (!(await lib.remove([photo.id]))) return;
                 forgetImages([photo.id]);
                 props.onEmptied();
               }}

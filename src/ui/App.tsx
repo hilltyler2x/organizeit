@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS, type Photo } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
-import { useLibrary, type Library } from "../lib/useLibrary";
+import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
 import { MoveDialog } from "./MoveDialog";
 import { Thumb } from "./Thumb";
@@ -34,13 +34,13 @@ export function App() {
       className={`app ${dragging ? "dragging" : ""}`}
       onDragOver={(e) => {
         e.preventDefault();
-        setDragging(true);
+        if (!lib.native) setDragging(true);
       }}
       onDragLeave={(e) => e.currentTarget === e.target && setDragging(false)}
       onDrop={(e) => {
         e.preventDefault();
         setDragging(false);
-        lib.importPhotos(filesToPicked(e.dataTransfer.files));
+        if (!lib.native) lib.importPhotos(filesToPicked(e.dataTransfer.files));
       }}
     >
       <header className="topbar">
@@ -49,8 +49,12 @@ export function App() {
           <span className="logo" aria-hidden>▦</span> OrganizeIt
         </button>
         <span className="spacer" />
-        <button className="hide-small" onClick={() => add(true)}>Add folder</button>
-        <button className="primary" onClick={() => add()}>Add photos</button>
+        {!lib.native && (
+          <>
+            <button className="hide-small" onClick={() => add(true)}>Add folder</button>
+            <button className="primary" onClick={() => add()}>Add photos</button>
+          </>
+        )}
       </header>
 
       <div className="layout">
@@ -80,8 +84,10 @@ export function App() {
         </nav>
 
         <main>
-          {!lib.ready ? (
+          {!lib.ready || (lib.native && lib.permission === null) ? (
             <p className="muted">Loading your library…</p>
+          ) : lib.native && lib.permission !== "granted" && lib.permission !== "limited" ? (
+            <ConnectLibrary lib={lib} />
           ) : category ? (
             <CategoryView lib={lib} category={category} onGone={() => open({ kind: "overview" })} />
           ) : (
@@ -104,7 +110,21 @@ function Overview({ lib, usage, onOpen, onAdd }: { lib: Library; usage: Category
     <div className="overview">
       <QueuePanel lib={lib} />
 
-      {lib.photos.length === 0 ? (
+      {lib.native && SORT_LIMIT > 0 && (
+        <p className="muted small">Test mode: sorting your newest {SORT_LIMIT.toLocaleString()} photos.</p>
+      )}
+      {lib.native && lib.permission === "limited" && (
+        <div className="queue-row limited">
+          <span>OrganizeIt can only see the photos you selected. Allow full access to sort your whole library.</span>
+          <button onClick={lib.openSettings}>Open Settings</button>
+        </div>
+      )}
+      {lib.photos.length === 0 && lib.native ? (
+        <div className="welcome">
+          <h1>{lib.scan ? "Reading your library…" : "No photos yet"}</h1>
+          <p className="muted">New photos are sorted automatically each time you open OrganizeIt.</p>
+        </div>
+      ) : lib.photos.length === 0 ? (
         <div className="welcome">
           <h1>Sort your camera roll</h1>
           <p>
@@ -155,14 +175,47 @@ function Overview({ lib, usage, onOpen, onAdd }: { lib: Library; usage: Category
   );
 }
 
+function ConnectLibrary({ lib }: { lib: Library }) {
+  const denied = lib.permission === "denied";
+  return (
+    <div className="welcome connect">
+      <div className="connect-icon" aria-hidden>▦</div>
+      <h1>{denied ? "Photos access is off" : "Let OrganizeIt sort your photos"}</h1>
+      <p>
+        OrganizeIt looks through your photo library, pulls receipts, invoices and order confirmations into Business Expenses,
+        and sorts product photos by exact item type. It keeps checking for new photos every time you open it.
+      </p>
+      {denied ? (
+        <>
+          <button className="primary big" onClick={lib.openSettings}>Open Settings</button>
+          <p className="muted small">In Settings, tap Photos and choose Full Access (iPhone) or Allow all (Android).</p>
+        </>
+      ) : (
+        <>
+          <button className="primary big" onClick={lib.connectLibrary}>Allow access to Photos</button>
+          <p className="muted small">Your photos stay on your phone. Only a small preview of each is sent to be sorted.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function QueuePanel({ lib }: { lib: Library }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
   const failed = lib.photos.filter((p) => p.status === "error");
   const [fixing, setFixing] = useState<Photo[] | null>(null);
-  if (!pending.length && !failed.length && lib.ai !== false && !lib.locked) return null;
+  if (!pending.length && !failed.length && lib.ai !== false && !lib.locked && !lib.scan) return null;
 
   return (
     <div className="queue">
+      {lib.scan && (
+        <div className="queue-row">
+          <span className="spinner" aria-hidden />
+          <strong>
+            Reading your library…{lib.scan.total ? ` ${lib.scan.done.toLocaleString()} of ${lib.scan.total.toLocaleString()}` : ""}
+          </strong>
+        </div>
+      )}
       {lib.locked && lib.ai !== false && <PasscodeForm lib={lib} />}
       {lib.ai === false && (
         <p className="error banner">
@@ -172,7 +225,7 @@ function QueuePanel({ lib }: { lib: Library }) {
       {pending.length > 0 && (
         <div className="queue-row">
           <span className={lib.ai && !lib.locked ? "spinner" : ""} aria-hidden />
-          <strong>Sorting {pending.length} photo{pending.length === 1 ? "" : "s"}…</strong>
+          <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
         </div>
       )}
       {failed.length > 0 && (
@@ -183,7 +236,7 @@ function QueuePanel({ lib }: { lib: Library }) {
           <ul className="mini-grid">
             {failed.slice(0, 12).map((p) => (
               <li key={p.id} title={p.error}>
-                <Thumb id={p.id} alt={p.fileName} />
+                <Thumb photo={p} alt={p.fileName} />
               </li>
             ))}
           </ul>

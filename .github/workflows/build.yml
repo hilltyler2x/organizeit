@@ -1,0 +1,161 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc
+      - run: npm test
+
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build:app
+      - name: Build test APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk OrganizeIt-test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrganizeIt-android-test
+          path: OrganizeIt-test.apk
+      # A stable download link for installing on a phone:
+      # https://github.com/<owner>/<repo>/releases/download/test-build/OrganizeIt-test.apk
+      - name: Publish test build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build
+          prerelease: true
+          make_latest: false
+          body: |
+            Latest test builds of OrganizeIt from `main` (${{ github.sha }}).
+            iPhone: install OrganizeIt-test.ipa with Sideloadly. Android: open this page on the phone and install OrganizeIt-test.apk.
+          files: OrganizeIt-test.apk
+
+  ios:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:app
+      # Unsigned build for a real iPhone. Install it with Sideloadly (Windows/Mac), which
+      # signs it with your own Apple ID; TestFlight signing can be added later.
+      - name: Build unsigned iPhone app
+        run: >
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release
+          -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package .ipa
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qr OrganizeIt-test.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrganizeIt-ios-test
+          path: OrganizeIt-test.ipa
+      - name: Publish test build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build
+          prerelease: true
+          make_latest: false
+          files: OrganizeIt-test.ipa
+
+  # Signs the iPhone app with Apple's cloud-managed certificates and uploads it to
+  # TestFlight. Runs on main (or when started by hand) once the four secrets below are set.
+  testflight:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [test, ios]
+    runs-on: macos-15
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - name: Check for App Store Connect secrets
+        id: secrets
+        run: |
+          if [ -n "$APPLE_TEAM_ID" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::TestFlight upload skipped: add APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 as repository secrets."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ready
+      - uses: actions/setup-node@v4
+        if: steps.secrets.outputs.ready
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.secrets.outputs.ready
+        run: npm ci && npm run build:app
+      - name: Install API key
+        if: steps.secrets.outputs.ready
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+      - name: Archive
+        if: steps.secrets.outputs.ready
+        run: >
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release
+          -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/App.xcarchive" archive
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic
+          CURRENT_PROJECT_VERSION=${{ github.run_number }}
+      - name: Upload to TestFlight
+        if: steps.secrets.outputs.ready
+        run: >
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive"
+          -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export"
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"

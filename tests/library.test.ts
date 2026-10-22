@@ -80,3 +80,33 @@ describe("library", () => {
     expect(formatBytes(6_000_000)).toBe("5.7 MB");
   });
 });
+
+describe("syncWithDevice", () => {
+  const asset = (id: string, extra: Partial<import("../src/core/library").DeviceAsset> = {}) => ({
+    id, fileName: `${id}.heic`, width: 10, height: 10, createdAt: 1, bytes: 100, mimeType: "image/heic", isScreenshot: false, ...extra,
+  });
+
+  it("queues new photos, keeps known ones and drops ones deleted on the phone", async () => {
+    const { syncWithDevice } = await import("../src/core/library");
+    let s = start();
+    let c = syncWithDevice(s, [asset("A"), asset("B", { isScreenshot: true })], newId);
+    expect(c.state.photos.map((p) => [p.source, p.status, p.isScreenshot])).toEqual([
+      [{ kind: "native", assetId: "A" }, "queued", false],
+      [{ kind: "native", assetId: "B" }, "queued", true],
+    ]);
+    s = c.state;
+    const b = s.photos.find((p) => p.source.kind === "native" && p.source.assetId === "B")!;
+    s = applyClassification(s, b.id, { section: "products", category: "Sneakers", label: "", confidence: 1 }, newId).state;
+    c = syncWithDevice(s, [asset("A"), asset("C")], newId);
+    expect(c.putPhotos.map((p) => p.source)).toEqual([{ kind: "native", assetId: "C" }]);
+    expect(c.deletedPhotoIds).toEqual([b.id]);
+    expect(c.state.categories.some((x) => x.name === "Sneakers")).toBe(false);
+    expect(c.state.photos).toHaveLength(2);
+  });
+
+  it("leaves photos added from files alone", async () => {
+    const { syncWithDevice } = await import("../src/core/library");
+    const s = start(photo("f"));
+    expect(syncWithDevice(s, [], newId).state.photos.map((p) => p.id)).toEqual(["f"]);
+  });
+});

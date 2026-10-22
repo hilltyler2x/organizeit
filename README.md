@@ -68,24 +68,53 @@ server/       Express API that holds the Anthropic key and calls Claude.
 tests/        Vitest tests for the core rule, library operations and the API.
 ```
 
-## Going to iOS / Android
+## Phone app (iOS / Android)
 
-The app is built so the native apps reuse this code rather than rebuilding it:
+The phone app is the same code wrapped with Capacitor (`ios/`, `android/`), plus a small
+native plugin in `native/photo-library` (iOS PhotoKit, Android MediaStore). The app:
 
-- **Wrap with Capacitor.** `capacitor.config.json` is already set up (`webDir: dist`).
-  `npm i @capacitor/core @capacitor/cli @capacitor/ios @capacitor/android`, then
-  `npx cap add ios`, `npx cap add android`, `npm run build && npx cap sync`.
-- **Point at the deployed API.** Set `VITE_API_URL` at build time. The API key stays on the
-  server, never in the app.
-- **Full photo library access.** Add a native `PhotoSource` in `src/lib/photoSource.ts`
-  backed by a Capacitor photo library plugin. That gives whole-library scanning and lets
-  Delete remove the original from the phone (`canDeleteOriginals: true`). Nothing in
-  `src/core` or `src/ui` needs to change.
+- asks for Photos permission, then reads the whole library in place (nothing is copied;
+  only a cached thumbnail per photo),
+- sorts new photos automatically every time it is opened, newest first,
+- deletes for real: bulk delete removes photos from the phone after the system's own
+  confirmation, and photos deleted elsewhere drop out of OrganizeIt.
+
+`npm run build:app` builds the web code against the API in `.env.app` and syncs it into
+both native projects.
+
+### Test on your phone
+
+- **Android (free):** every push to `main` builds a test APK and publishes it at
+  `https://github.com/hilltyler2x/organizeit/releases/download/test-build/OrganizeIt-test.apk`.
+  Open that link on the phone, download, and install (allow installs from your browser when
+  Android asks). Each build is signed with a fresh debug key, so uninstall the old one
+  before installing a newer build.
+- **iPhone with a Mac (free):** install Xcode, then `npm ci && npm run build:app` and open
+  `ios/App/App.xcodeproj`. Under Signing & Capabilities choose your Apple ID as the Team and
+  change the bundle identifier to something unique. Plug in the iPhone, pick it as the
+  run destination and press Run. Free builds expire after 7 days; run again to renew.
+- **iPhone from Windows (free):** every push to `main` also publishes an unsigned
+  `OrganizeIt-test.ipa` on the same `test-build` release. Install
+  [Sideloadly](https://sideloadly.io) on the PC (plus iTunes from Apple's website, not the
+  Microsoft Store), plug in the iPhone, drag the .ipa into Sideloadly, enter your Apple ID
+  and press Start. Turn on Settings → Privacy & Security → Developer Mode on the iPhone, then
+  trust your Apple ID under Settings → General → VPN & Device Management. Builds expire
+  after 7 days; repeat to renew.
+- **TestFlight (Apple Developer account):** the `testflight` job archives the app with
+  Apple's cloud-managed signing and uploads it to App Store Connect on every push to `main`
+  (or when run by hand from the Actions tab). It needs these repository secrets:
+  `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the contents of an App
+  Store Connect API key with Admin access). The bundle ID `com.hilltyler.organizeit` must be
+  registered and have an app record in App Store Connect. Builds appear in the TestFlight
+  app for internal testers after Apple finishes processing (usually 10 to 30 minutes).
+
+`.env.app` sets `VITE_SORT_LIMIT` so test builds only sort the newest photos (remove it to
+sort the whole library).
 
 ## Limits of the web version
 
-- A website can't read the whole Photos library in the background or delete originals from
-  it. You choose which photos to add, and Delete removes them from OrganizeIt only. The
-  native build removes both limits.
+- A website can't read the whole Photos library or delete originals from it. You choose
+  which photos to add, and Delete removes them from OrganizeIt only. The phone app
+  removes both limits.
 - HEIC files open in Safari; other browsers skip them. iPhones normally convert to JPEG when
   sharing to the web picker.

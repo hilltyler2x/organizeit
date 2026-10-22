@@ -100,7 +100,13 @@ both native projects.
   and press Start. Turn on Settings → Privacy & Security → Developer Mode on the iPhone, then
   trust your Apple ID under Settings → General → VPN & Device Management. Builds expire
   after 7 days; repeat to renew.
-- **TestFlight:** needs an Apple Developer account ($99/year); not set up yet.
+- **TestFlight (Apple Developer account):** the `testflight` job archives the app with
+  Apple's cloud-managed signing and uploads it to App Store Connect on every push to `main`
+  (or when run by hand from the Actions tab). It needs these repository secrets:
+  `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8` (the contents of an App
+  Store Connect API key with Admin access). The bundle ID `com.hilltyler.organizeit` must be
+  registered and have an app record in App Store Connect. Builds appear in the TestFlight
+  app for internal testers after Apple finishes processing (usually 10 to 30 minutes).
 
 `.env.app` sets `VITE_SORT_LIMIT` so test builds only sort the newest photos (remove it to
 sort the whole library).

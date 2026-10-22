@@ -6,6 +6,8 @@
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>OrganizeIt sorts your photos into categories like Business Expenses and product types, and lets you clean up the ones you don't need.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>

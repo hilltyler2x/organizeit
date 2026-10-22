@@ -95,3 +95,67 @@ jobs:
           prerelease: true
           make_latest: false
           files: OrganizeIt-test.ipa
+
+  # Signs the iPhone app with Apple's cloud-managed certificates and uploads it to
+  # TestFlight. Runs on main (or when started by hand) once the four secrets below are set.
+  testflight:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [test, ios]
+    runs-on: macos-15
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - name: Check for App Store Connect secrets
+        id: secrets
+        run: |
+          if [ -n "$APPLE_TEAM_ID" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::TestFlight upload skipped: add APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 as repository secrets."
+          fi
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ready
+      - uses: actions/setup-node@v4
+        if: steps.secrets.outputs.ready
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.secrets.outputs.ready
+        run: npm ci && npm run build:app
+      - name: Install API key
+        if: steps.secrets.outputs.ready
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+      - name: Archive
+        if: steps.secrets.outputs.ready
+        run: >
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release
+          -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/App.xcarchive" archive
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic
+          CURRENT_PROJECT_VERSION=${{ github.run_number }}
+      - name: Upload to TestFlight
+        if: steps.secrets.outputs.ready
+        run: >
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive"
+          -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export"
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"

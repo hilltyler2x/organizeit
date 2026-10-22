@@ -20,6 +20,20 @@ npm run dev                 # web app on http://localhost:5173, API on :8787
 Production: `npm run build && npm start` serves the built site and the API from one Node
 process on `PORT` (default 8787).
 
+## Put it online (Render)
+
+`render.yaml` sets everything up on [Render](https://render.com) (free plan):
+
+1. Sign in to Render with GitHub, then **New → Blueprint** and pick this repo.
+2. Fill in the two secrets it asks for: `ANTHROPIC_API_KEY` (from
+   console.anthropic.com) and `APP_PASSCODE` (any passcode you choose).
+3. Deploy. Open the `…onrender.com` address on your phone, enter the passcode once, and use
+   Share → **Add to Home Screen** to get an app icon.
+
+The passcode keeps strangers from using your Anthropic credits, and each IP is capped at
+`SORTS_PER_HOUR` photos per hour (default 2000). On the free plan the server sleeps after
+15 minutes idle, so the first sort after a break takes about a minute to start.
+
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
 
 ## How it works

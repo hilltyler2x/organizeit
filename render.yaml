@@ -1,0 +1,17 @@
+# One-click hosting on Render (render.com): New > Blueprint > pick this repo.
+# Render asks for the two secret values below; they stay on the server.
+services:
+  - type: web
+    name: organizeit
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSCODE
+        sync: false

@@ -19,13 +19,13 @@ function fakeClient(answers: object[]) {
   return { client, calls };
 }
 
-async function post(app: ReturnType<typeof createApp>, body: object) {
+async function post(app: ReturnType<typeof createApp>, body: object, headers: Record<string, string> = {}, path = "/api/classify") {
   const server = app.listen(0);
   const port = (server.address() as { port: number }).port;
   try {
-    const r = await fetch(`http://localhost:${port}/api/classify`, {
+    const r = await fetch(`http://localhost:${port}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
     return { status: r.status, body: await r.json() };
@@ -80,5 +80,28 @@ describe("POST /api/classify", () => {
   it("rejects malformed requests", async () => {
     const { client } = fakeClient([]);
     expect((await post(createApp(client), { image: "" })).status).toBe(400);
+  });
+
+  it("requires the passcode when one is set", async () => {
+    const answer = { section: "products", category: "Bags", label: "tote", confidence: 0.9 };
+    const { client, calls } = fakeClient([answer]);
+    const app = createApp(client, { passcode: "s3cret" });
+    expect((await post(app, req)).status).toBe(401);
+    expect((await post(app, req, { "x-organizeit-passcode": "wrong" })).status).toBe(401);
+    expect((await post(app, {}, { "x-organizeit-passcode": "wrong" }, "/api/unlock")).status).toBe(401);
+    expect((await post(app, {}, { "x-organizeit-passcode": "s3cret" }, "/api/unlock")).status).toBe(200);
+    expect(calls).toHaveLength(0);
+    const ok = await post(app, req, { "x-organizeit-passcode": "s3cret" });
+    expect(ok.status).toBe(200);
+    expect(ok.body.category).toBe("Bags");
+  });
+
+  it("caps sorts per hour", async () => {
+    const answer = { section: "products", category: "Bags", label: "tote", confidence: 0.9 };
+    const { client } = fakeClient([answer, answer, answer]);
+    const app = createApp(client, { perHour: 2 });
+    expect((await post(app, req)).status).toBe(200);
+    expect((await post(app, req)).status).toBe(200);
+    expect((await post(app, req)).status).toBe(429);
   });
 });

@@ -1,1 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0f766e"/><g fill="#fff"><rect x="112" y="112" width="128" height="128" rx="24"/><rect x="272" y="112" width="128" height="128" rx="24" opacity=".75"/><rect x="112" y="272" width="128" height="128" rx="24" opacity=".75"/><rect x="272" y="272" width="128" height="128" rx="24" opacity=".5"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset=".55" stop-color="#0f766e"/><stop offset="1" stop-color="#134e4a"/></linearGradient>
+<filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#042f2e" flood-opacity=".35"/></filter>
+</defs><clipPath id="r"><rect width="1024" height="1024" rx="230"/></clipPath><g clip-path="url(#r)"><rect width="1024" height="1024" fill="url(#bg)"/>
+
+
+<g filter="url(#sh)">
+<rect x="184" y="184" width="300" height="300" rx="68" fill="#fff"/>
+<rect x="540" y="184" width="300" height="300" rx="68" fill="#fbbf24"/>
+<rect x="184" y="540" width="300" height="300" rx="68" fill="#a78bfa"/>
+<rect x="540" y="540" width="300" height="300" rx="68" fill="#5eead4"/>
+</g>
+<!-- photo glyph -->
+<circle cx="398" cy="270" r="30" fill="#f59e0b"/>
+<path d="M226 430 L310 318 L368 392 L398 356 L444 430 Z" fill="#0f766e" stroke="#0f766e" stroke-width="16" stroke-linejoin="round"/>
+<!-- receipt -->
+<path d="M630 244 h120 v176 l-20 -14 -20 14 -20 -14 -20 14 -20 -14 -20 14 z" fill="#fff" stroke="#fff" stroke-width="10" stroke-linejoin="round"/>
+<g stroke="#d97706" stroke-width="16" stroke-linecap="round"><line x1="656" y1="290" x2="724" y2="290"/><line x1="656" y1="330" x2="724" y2="330"/><line x1="656" y1="370" x2="700" y2="370"/></g>
+<!-- heart -->
+<path d="M334 790 C 256 736 234 700 234 664 C 234 630 260 608 288 608 C 310 608 326 620 334 636 C 342 620 358 608 380 608 C 408 608 434 630 434 664 C 434 700 412 736 334 790 Z" fill="#fff"/>
+<!-- tag -->
+<g transform="translate(690 690) rotate(-45)"><path d="M-46 -96 h92 a14 14 0 0 1 14 14 v150 l-60 56 -60 -56 v-150 a14 14 0 0 1 14 -14 z" fill="#fff"/><circle cx="0" cy="-54" r="16" fill="#0d9488"/></g>
+</g></svg>

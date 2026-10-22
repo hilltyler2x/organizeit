@@ -1,12 +1,12 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { Category, Photo } from "../core/types";
 
-// On-device storage for the web build. A native build swaps this for its own
-// implementation of the same functions.
+// On-device storage for the library index: photo records, categories and thumbnails.
 
 interface OrganizeItDB extends DBSchema {
   photos: { key: string; value: Photo; indexes: { byCategory: string } };
-  blobs: { key: string; value: { id: string; original: Blob; thumb: Blob } };
+  // `original` is only kept for photos added from files; library photos are read in place.
+  blobs: { key: string; value: { id: string; original?: Blob; thumb: Blob } };
   categories: { key: string; value: Category };
 }
 
@@ -60,6 +60,12 @@ export async function deletePhotos(ids: string[]) {
     ...ids.flatMap((id) => [tx.objectStore("photos").delete(id), tx.objectStore("blobs").delete(id)]),
     tx.done,
   ]);
+}
+
+export async function putThumb(id: string, thumb: Blob) {
+  const d = await db();
+  const existing = await d.get("blobs", id);
+  await d.put("blobs", { ...existing, id, thumb });
 }
 
 export async function getBlobs(id: string) {

@@ -2,6 +2,18 @@ import { emptyCreatedCategories } from "./storage";
 import { resolveCategory } from "./categories";
 import type { Category, Classification, Photo, Section } from "./types";
 
+/** One photo as the device's photo library reports it. */
+export interface DeviceAsset {
+  id: string;
+  fileName: string;
+  width: number;
+  height: number;
+  createdAt: number;
+  bytes: number;
+  mimeType: string;
+  isScreenshot: boolean;
+}
+
 // Pure state transitions for the photo library. The UI layer persists the results.
 
 export interface LibraryState {
@@ -95,4 +107,37 @@ export function renameCategory(state: LibraryState, categoryId: string, name: st
   // Merge: move everything into the existing category; the old one is removed when empty.
   const ids = state.photos.filter((p) => p.categoryId === categoryId).map((p) => p.id);
   return movePhotos(state, ids, { categoryId: category.id }, newId);
+}
+
+/**
+ * Brings the library in line with the device: queues photos that are new on the phone and
+ * drops ones that were deleted outside OrganizeIt. Photos added from files are left alone.
+ */
+export function syncWithDevice(state: LibraryState, assets: DeviceAsset[], newId: () => string, now: number = Date.now()): Change {
+  const onDevice = new Map(assets.map((a) => [a.id, a]));
+  const known = new Set<string>();
+  const gone: string[] = [];
+  for (const p of state.photos) {
+    if (p.source.kind !== "native") continue;
+    if (onDevice.has(p.source.assetId)) known.add(p.source.assetId);
+    else gone.push(p.id);
+  }
+  const added: Photo[] = assets
+    .filter((a) => !known.has(a.id))
+    .map((a) => ({
+      id: newId(),
+      fileName: a.fileName,
+      mimeType: a.mimeType,
+      bytes: a.bytes,
+      width: a.width,
+      height: a.height,
+      takenAt: a.createdAt,
+      importedAt: now,
+      status: "queued",
+      isScreenshot: a.isScreenshot,
+      source: { kind: "native", assetId: a.id },
+    }));
+  const goneIds = new Set(gone);
+  const photos = [...state.photos.filter((p) => !goneIds.has(p.id)), ...added];
+  return finish(state, photos, state.categories, added, [], gone);
 }

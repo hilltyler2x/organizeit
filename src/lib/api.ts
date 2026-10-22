@@ -59,6 +59,7 @@ export async function classify(input: {
   fileName: string;
   width: number;
   height: number;
+  isScreenshot: boolean;
   categories: Category[];
 }): Promise<Classification> {
   let r: Response;

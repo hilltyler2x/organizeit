@@ -37,6 +37,8 @@ export interface Photo {
   label?: string;
   confidence?: number;
   error?: string;
+  /** The device marked this as a screenshot, a strong hint for business expenses. */
+  isScreenshot?: boolean;
   /** Where the photo came from, so a native build can act on the original asset. */
   source: { kind: "file" } | { kind: "native"; assetId: string };
 }

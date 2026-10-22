@@ -1,0 +1,13 @@
+{
+  "name": "organizeit-photo-library",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OrganizeIt's native photo library bridge: permission, listing, image export and deletion.",
+  "main": "index.js",
+  "files": ["android/src/main/", "android/build.gradle", "ios/Sources", "Package.swift", "index.js"],
+  "capacitor": {
+    "ios": { "src": "ios" },
+    "android": { "src": "android" }
+  },
+  "peerDependencies": { "@capacitor/core": ">=8.0.0" }
+}

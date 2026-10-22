@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc
+      - run: npm test
+
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build:app
+      - name: Build test APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk OrganizeIt-test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrganizeIt-android-test
+          path: OrganizeIt-test.apk
+      # A stable download link for installing on a phone:
+      # https://github.com/<owner>/<repo>/releases/download/test-build/OrganizeIt-test.apk
+      - name: Publish test build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build (Android)
+          prerelease: true
+          make_latest: false
+          body: |
+            Latest Android test build of OrganizeIt from `main` (${{ github.sha }}).
+            Open this page on your Android phone, tap OrganizeIt-test.apk, and install it.
+          files: OrganizeIt-test.apk
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:app
+      - name: Compile for the iOS simulator (no signing)
+        run: >
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
+          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build

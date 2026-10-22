@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS, type Photo } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
-import { useLibrary, type Library } from "../lib/useLibrary";
+import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
 import { MoveDialog } from "./MoveDialog";
 import { Thumb } from "./Thumb";
@@ -110,6 +110,9 @@ function Overview({ lib, usage, onOpen, onAdd }: { lib: Library; usage: Category
     <div className="overview">
       <QueuePanel lib={lib} />
 
+      {lib.native && SORT_LIMIT > 0 && (
+        <p className="muted small">Test mode: sorting your newest {SORT_LIMIT.toLocaleString()} photos.</p>
+      )}
       {lib.native && lib.permission === "limited" && (
         <div className="queue-row limited">
           <span>OrganizeIt can only see the photos you selected. Allow full access to sort your whole library.</span>

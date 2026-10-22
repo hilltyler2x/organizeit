@@ -50,16 +50,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-build
-          name: Test build (Android)
+          name: Test build
           prerelease: true
           make_latest: false
           body: |
-            Latest Android test build of OrganizeIt from `main` (${{ github.sha }}).
-            Open this page on your Android phone, tap OrganizeIt-test.apk, and install it.
+            Latest test builds of OrganizeIt from `main` (${{ github.sha }}).
+            iPhone: install OrganizeIt-test.ipa with Sideloadly. Android: open this page on the phone and install OrganizeIt-test.apk.
           files: OrganizeIt-test.apk
 
   ios:
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -68,8 +70,28 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:app
-      - name: Compile for the iOS simulator (no signing)
+      # Unsigned build for a real iPhone. Install it with Sideloadly (Windows/Mac), which
+      # signs it with your own Apple ID; TestFlight signing can be added later.
+      - name: Build unsigned iPhone app
         run: >
-          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug
-          -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'
-          CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release
+          -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Package .ipa
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qr OrganizeIt-test.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrganizeIt-ios-test
+          path: OrganizeIt-test.ipa
+      - name: Publish test build
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build
+          prerelease: true
+          make_latest: false
+          files: OrganizeIt-test.ipa

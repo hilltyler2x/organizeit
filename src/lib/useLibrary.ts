@@ -18,6 +18,8 @@ import { PhotoLibrary, isNativeApp, listAllAssets, type PermissionStatus } from 
 import type { PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
+// Optional cap while testing: only the newest N photos on the phone are sorted.
+export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 const CONCURRENCY = 3;
 
 export function useLibrary() {
@@ -140,7 +142,8 @@ export function useLibrary() {
       setPermission(status);
       if (status !== "granted" && status !== "limited") return;
       setScan({ done: 0, total: 0 });
-      const assets = await listAllAssets((done, total) => setScan({ done, total }));
+      let assets = await listAllAssets((done, total) => setScan({ done, total }));
+      if (SORT_LIMIT) assets = assets.sort((a, b) => b.createdAt - a.createdAt).slice(0, SORT_LIMIT);
       await commit(syncWithDevice(stateRef.current, assets, newId));
     } finally {
       setScan(null);

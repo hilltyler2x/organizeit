@@ -93,8 +93,17 @@ both native projects.
   `ios/App/App.xcodeproj`. Under Signing & Capabilities choose your Apple ID as the Team and
   change the bundle identifier to something unique. Plug in the iPhone, pick it as the
   run destination and press Run. Free builds expire after 7 days; run again to renew.
-- **iPhone without a Mac:** needs an Apple Developer account ($99/year) to send builds
-  through TestFlight.
+- **iPhone from Windows (free):** every push to `main` also publishes an unsigned
+  `OrganizeIt-test.ipa` on the same `test-build` release. Install
+  [Sideloadly](https://sideloadly.io) on the PC (plus iTunes from Apple's website, not the
+  Microsoft Store), plug in the iPhone, drag the .ipa into Sideloadly, enter your Apple ID
+  and press Start. Turn on Settings → Privacy & Security → Developer Mode on the iPhone, then
+  trust your Apple ID under Settings → General → VPN & Device Management. Builds expire
+  after 7 days; repeat to renew.
+- **TestFlight:** needs an Apple Developer account ($99/year); not set up yet.
+
+`.env.app` sets `VITE_SORT_LIMIT` so test builds only sort the newest photos (remove it to
+sort the whole library).
 
 ## Limits of the web version
 

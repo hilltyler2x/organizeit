@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per branch at a time. Merges to main queue up instead of overlapping, so two runs
+# never replace the same test-build release files at once (and the newest build wins).
+# A newer push to a PR cancels that PR's older run.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest

@@ -84,8 +84,33 @@ native plugin in `native/photo-library` (iOS PhotoKit, Android MediaStore). The 
 - asks for Photos permission, then reads the whole library in place (nothing is copied;
   only a cached thumbnail per photo),
 - sorts new photos automatically every time it is opened, newest first,
+- keeps sorting after it is closed, as far as the phone allows (see below),
 - deletes for real: bulk delete removes photos from the phone after the system's own
   confirmation, and photos deleted elsewhere drop out of OrganizeIt.
+
+### Sorting while the app is closed
+
+The web view stops when the app is closed, so the native plugin has its own sorter
+(`BackgroundSorter.swift`, `BackgroundSorter.java`). Whenever the queue, categories or
+lessons change, the app hands it a snapshot (`src/lib/backgroundSort.ts`): server address,
+passcode, categories, the newest 60 lessons, which photos are waiting, and the newest photo it
+knows about. The sorter sends those photos, then any newer ones, to `/api/classify` and keeps
+the answers in a small file. Next time the app opens it reads the library, then files those
+answers through the same rules as its own queue (`src/core/background.ts`), so photos the AI
+was unsure about still go to To review and the core rule still holds.
+
+- **iPhone, iOS 26 or later:** when photos are waiting, a continued processing task starts
+  while the app is open. Close the app and sorting carries on, with progress shown by iOS,
+  which can be stopped from there. While the app is open it sorts by itself and the task only
+  follows along.
+- **Any iPhone:** about 30 seconds of extra time right after closing, plus background refresh
+  and processing tasks that iOS runs when it chooses (often overnight while charging) to sort
+  photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
+  an app that was swiped away in the app switcher until it is opened again. Background App
+  Refresh must be on for OrganizeIt in Settings.
+- **Android:** a "Sorting photos" notification (a foreground service) keeps sorting after
+  the app is closed; new photos are sorted about 30 seconds after they are added, and hourly
+  as a fallback (Android may delay these to save battery).
 
 `npm run build:app` builds the web code against the API in `.env.app` and syncs it into
 both native projects.

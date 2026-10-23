@@ -4,13 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
-import android.content.ContentResolver;
-import android.content.ContentUris;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.ImageDecoder;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.MediaStore;
@@ -29,7 +25,6 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -122,52 +117,19 @@ public class PhotoLibraryPlugin extends Plugin {
         int offset = Math.max(0, call.getInt("offset", 0));
         int limit = Math.max(1, Math.min(call.getInt("limit", 500), 2000));
         executor.execute(() -> {
-            List<String> projection = new ArrayList<>();
-            projection.add(MediaStore.Images.Media._ID);
-            projection.add(MediaStore.Images.Media.DISPLAY_NAME);
-            projection.add(MediaStore.Images.Media.WIDTH);
-            projection.add(MediaStore.Images.Media.HEIGHT);
-            projection.add(MediaStore.Images.Media.DATE_TAKEN);
-            projection.add(MediaStore.Images.Media.DATE_ADDED);
-            projection.add(MediaStore.Images.Media.SIZE);
-            projection.add(MediaStore.Images.Media.MIME_TYPE);
-            if (Build.VERSION.SDK_INT >= 29) projection.add(MediaStore.Images.Media.RELATIVE_PATH);
             String order = MediaStore.Images.Media.DATE_ADDED + " ASC, " + MediaStore.Images.Media._ID + " ASC";
             try (
                 Cursor c = getContext()
                     .getContentResolver()
-                    .query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection.toArray(new String[0]), null, null, order)
+                    .query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), null, null, order)
             ) {
                 JSArray assets = new JSArray();
                 int total = c == null ? 0 : c.getCount();
                 int end = Math.min(total, offset + limit);
                 if (c != null && offset < total && c.moveToPosition(offset)) {
-                    int idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID);
-                    int nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME);
-                    int wCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH);
-                    int hCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT);
-                    int takenCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN);
-                    int addedCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED);
-                    int sizeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE);
-                    int mimeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE);
-                    int pathCol = Build.VERSION.SDK_INT >= 29 ? c.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH) : -1;
+                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
                     do {
-                        long taken = c.getLong(takenCol);
-                        String name = c.getString(nameCol);
-                        String path = pathCol >= 0 ? c.getString(pathCol) : null;
-                        JSObject a = new JSObject();
-                        a.put("id", String.valueOf(c.getLong(idCol)));
-                        a.put("fileName", name == null ? "" : name);
-                        a.put("width", c.getInt(wCol));
-                        a.put("height", c.getInt(hCol));
-                        a.put("createdAt", taken > 0 ? taken : c.getLong(addedCol) * 1000);
-                        a.put("bytes", c.getLong(sizeCol));
-                        a.put("mimeType", c.getString(mimeCol) == null ? "image/jpeg" : c.getString(mimeCol));
-                        a.put(
-                            "isScreenshot",
-                            (path != null && path.toLowerCase().contains("screenshot")) || (name != null && name.toLowerCase().startsWith("screenshot"))
-                        );
-                        assets.put(a);
+                        assets.put(MediaAssets.describe(c, cols));
                     } while (c.getPosition() < end - 1 && c.moveToNext());
                 }
                 JSObject ret = new JSObject();
@@ -182,7 +144,7 @@ public class PhotoLibraryPlugin extends Plugin {
     }
 
     private Uri uriFor(String id) {
-        return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, Long.parseLong(id));
+        return MediaAssets.uriFor(id);
     }
 
     /** Returns a JPEG copy of a photo scaled so its longest side is at most maxSide. */
@@ -213,34 +175,7 @@ public class PhotoLibraryPlugin extends Plugin {
     }
 
     private Bitmap decode(Uri uri, int maxSide) throws Exception {
-        ContentResolver resolver = getContext().getContentResolver();
-        if (Build.VERSION.SDK_INT >= 28) {
-            // ImageDecoder applies the photo's EXIF rotation.
-            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri), (decoder, info, source) -> {
-                int w = info.getSize().getWidth();
-                int h = info.getSize().getHeight();
-                float scale = Math.min(1f, (float) maxSide / Math.max(w, h));
-                decoder.setTargetSize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-            });
-        }
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        try (InputStream in = resolver.openInputStream(uri)) {
-            BitmapFactory.decodeStream(in, null, bounds);
-        }
-        BitmapFactory.Options opts = new BitmapFactory.Options();
-        opts.inSampleSize = 1;
-        while (Math.max(bounds.outWidth, bounds.outHeight) / (opts.inSampleSize * 2) >= maxSide) opts.inSampleSize *= 2;
-        try (InputStream in = resolver.openInputStream(uri)) {
-            Bitmap b = BitmapFactory.decodeStream(in, null, opts);
-            if (b == null) throw new Exception("Unsupported image");
-            float scale = Math.min(1f, (float) maxSide / Math.max(b.getWidth(), b.getHeight()));
-            if (scale >= 1f) return b;
-            Bitmap scaled = Bitmap.createScaledBitmap(b, Math.round(b.getWidth() * scale), Math.round(b.getHeight() * scale), true);
-            b.recycle();
-            return scaled;
-        }
+        return MediaAssets.decode(getContext().getContentResolver(), uri, maxSide);
     }
 
     /**

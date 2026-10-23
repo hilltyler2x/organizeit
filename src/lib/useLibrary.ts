@@ -25,7 +25,10 @@ const CONCURRENCY = 3;
 export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
   const [ready, setReady] = useState(false);
-  const [ai, setAi] = useState<boolean | null>(null);
+  // "offline" covers both a down server and one still waking up; it is re-checked until it answers.
+  const [server, setServer] = useState<"checking" | "offline" | "ok" | "no-ai">("checking");
+  const [aiProblem, setAiProblem] = useState<string | null>(null);
+  const ai = server === "ok" ? true : server === "no-ai" ? false : null;
   const [locked, setLocked] = useState(false);
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
@@ -72,11 +75,35 @@ export function useLibrary() {
       setState(stateRef.current);
       setReady(true);
     })();
-    serverStatus().then((s) => {
-      setAi(s.ai);
-      setLocked(s.passcodeRequired && !hasPasscode());
-    });
   }, []);
+
+  const checkServer = useCallback(async () => {
+    const s = await serverStatus();
+    if (!s.reachable) {
+      setServer("offline");
+      return;
+    }
+    setServer(s.ai ? "ok" : "no-ai");
+    setAiProblem(null);
+    setLocked(s.passcodeRequired && !hasPasscode());
+  }, []);
+
+  useEffect(() => {
+    checkServer();
+  }, [checkServer]);
+
+  // Keep trying while the server is unreachable, and check again when the app comes back.
+  useEffect(() => {
+    if (server !== "offline") return;
+    const timer = setTimeout(checkServer, 10_000);
+    return () => clearTimeout(timer);
+  }, [server, checkServer]);
+
+  useEffect(() => {
+    const onVisible = () => document.visibilityState === "visible" && server !== "ok" && checkServer();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [server, checkServer]);
 
   const classifyOne = useCallback(async (photo: Photo) => {
     await patchPhoto(photo.id, { status: "classifying", error: undefined });
@@ -98,6 +125,19 @@ export function useLibrary() {
         await patchPhoto(photo.id, { status: "queued", error: undefined });
         return;
       }
+      if (err instanceof ApiError && err.status === 0) {
+        // Server unreachable: pause the queue until it answers again.
+        setServer("offline");
+        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        return;
+      }
+      if (err instanceof ApiError && err.status === 503) {
+        // The server is up but can't use its Anthropic key.
+        setServer("no-ai");
+        setAiProblem(err.message);
+        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        return;
+      }
       const tries = (attempts.current.get(photo.id) ?? 0) + 1;
       attempts.current.set(photo.id, tries);
       const retryable = err instanceof ApiError && err.retryable && tries < 4;
@@ -106,7 +146,6 @@ export function useLibrary() {
         error: err instanceof Error ? err.message : String(err),
       });
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
-      if (err instanceof ApiError && err.status === 503) setAi(false);
     }
   }, [commit, patchPhoto]);
 
@@ -222,6 +261,8 @@ export function useLibrary() {
     ...state,
     ready,
     ai,
+    server,
+    aiProblem,
     locked,
     native: isNativeApp,
     permission,

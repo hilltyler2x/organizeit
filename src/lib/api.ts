@@ -27,13 +27,21 @@ export function hasPasscode() {
   return passcode !== "";
 }
 
-export async function serverStatus(): Promise<{ ai: boolean; passcodeRequired: boolean }> {
+export type ServerStatus = { reachable: boolean; ai: boolean; passcodeRequired: boolean };
+
+/**
+ * Asks the server whether AI sorting is set up. `reachable` is false while the server is
+ * down or still waking up (the free Render plan sleeps when idle and takes about a minute to
+ * start), so callers should keep checking rather than treat that as "no AI".
+ */
+export async function serverStatus(): Promise<ServerStatus> {
   try {
-    const r = await fetch(`${API}/api/health`);
+    const r = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(90_000) });
     const body = await r.json();
-    return { ai: r.ok && body.ai === true, passcodeRequired: body.passcodeRequired === true };
+    if (!r.ok) return { reachable: false, ai: false, passcodeRequired: false };
+    return { reachable: true, ai: body.ai === true, passcodeRequired: body.passcodeRequired === true };
   } catch {
-    return { ai: false, passcodeRequired: false };
+    return { reachable: false, ai: false, passcodeRequired: false };
   }
 }
 

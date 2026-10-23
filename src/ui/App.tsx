@@ -204,7 +204,8 @@ function QueuePanel({ lib }: { lib: Library }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
   const failed = lib.photos.filter((p) => p.status === "error");
   const [fixing, setFixing] = useState<Photo[] | null>(null);
-  if (!pending.length && !failed.length && lib.ai !== false && !lib.locked && !lib.scan) return null;
+  const connecting = lib.server === "checking" || lib.server === "offline";
+  if (!pending.length && !failed.length && lib.server === "ok" && !lib.locked && !lib.scan) return null;
 
   return (
     <div className="queue">
@@ -216,15 +217,25 @@ function QueuePanel({ lib }: { lib: Library }) {
           </strong>
         </div>
       )}
-      {lib.locked && lib.ai !== false && <PasscodeForm lib={lib} />}
-      {lib.ai === false && (
+      {connecting && (pending.length > 0 || lib.server === "offline") && (
+        <div className="queue-row">
+          <span className="spinner" aria-hidden />
+          <span>
+            <strong>Connecting to the sorting server…</strong>
+            <span className="muted small"> After a quiet spell it can take a minute to wake up.</span>
+          </span>
+        </div>
+      )}
+      {lib.locked && lib.server === "ok" && <PasscodeForm lib={lib} />}
+      {lib.server === "no-ai" && (
         <p className="error banner">
-          AI sorting isn't connected. Start the server with an ANTHROPIC_API_KEY to sort photos; anything you add waits here until then.
+          {lib.aiProblem ?? "The sorting server doesn't have an Anthropic API key."} Add a working ANTHROPIC_API_KEY to the
+          server's environment (on Render: Environment), then reopen OrganizeIt. Photos wait here until then.
         </p>
       )}
       {pending.length > 0 && (
         <div className="queue-row">
-          <span className={lib.ai && !lib.locked ? "spinner" : ""} aria-hidden />
+          <span className={lib.server === "ok" && !lib.locked ? "spinner" : ""} aria-hidden />
           <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
         </div>
       )}

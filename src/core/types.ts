@@ -18,7 +18,11 @@ export interface Category {
   createdAt: number;
 }
 
-export type PhotoStatus = "queued" | "classifying" | "sorted" | "error";
+/**
+ * "review" means the AI wasn't sure, so the person picks the category. Like "queued" and
+ * "error" it is a to-do state, never a category: the photo has no categoryId until it is filed.
+ */
+export type PhotoStatus = "queued" | "classifying" | "sorted" | "review" | "error";
 
 export interface Photo {
   id: string;
@@ -36,6 +40,8 @@ export interface Photo {
   /** Short description of what is in the photo, from the classifier. */
   label?: string;
   confidence?: number;
+  /** The AI's best guess for a photo in "review", offered as a one-tap answer. */
+  suggestion?: { section: Section; category: string };
   error?: string;
   /** The device marked this as a screenshot, a strong hint for business expenses. */
   isScreenshot?: boolean;
@@ -49,4 +55,20 @@ export interface Classification {
   category: string;
   label: string;
   confidence: number;
+}
+
+/**
+ * A correction the person made: a photo the AI described as `label` belongs in `categoryId`.
+ * These are sent with later sorts so the AI learns this person's categories.
+ */
+export interface Lesson {
+  id: string;
+  label: string;
+  categoryId: string;
+  /** Section and name when the lesson was made, used if that category is later removed. */
+  section: Section;
+  category: string;
+  /** Name of the category the AI had picked or guessed, when it got it wrong. */
+  wrongCategory?: string;
+  createdAt: number;
 }

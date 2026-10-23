@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { Category, Photo } from "../core/types";
+import type { Category, Lesson, Photo } from "../core/types";
 
 // On-device storage for the library index: photo records, categories and thumbnails.
 
@@ -8,26 +8,36 @@ interface OrganizeItDB extends DBSchema {
   // `original` is only kept for photos added from files; library photos are read in place.
   blobs: { key: string; value: { id: string; original?: Blob; thumb: Blob } };
   categories: { key: string; value: Category };
+  // Corrections the person made, used to teach the classifier.
+  lessons: { key: string; value: Lesson };
 }
 
 let dbPromise: Promise<IDBPDatabase<OrganizeItDB>> | null = null;
 
 function db() {
-  dbPromise ??= openDB<OrganizeItDB>("organizeit", 1, {
-    upgrade(d) {
-      const photos = d.createObjectStore("photos", { keyPath: "id" });
-      photos.createIndex("byCategory", "categoryId");
-      d.createObjectStore("blobs", { keyPath: "id" });
-      d.createObjectStore("categories", { keyPath: "id" });
+  dbPromise ??= openDB<OrganizeItDB>("organizeit", 2, {
+    upgrade(d, oldVersion) {
+      if (oldVersion < 1) {
+        const photos = d.createObjectStore("photos", { keyPath: "id" });
+        photos.createIndex("byCategory", "categoryId");
+        d.createObjectStore("blobs", { keyPath: "id" });
+        d.createObjectStore("categories", { keyPath: "id" });
+      }
+      if (oldVersion < 2) d.createObjectStore("lessons", { keyPath: "id" });
     },
   });
   return dbPromise;
 }
 
-export async function loadAll(): Promise<{ photos: Photo[]; categories: Category[] }> {
+export async function loadAll(): Promise<{ photos: Photo[]; categories: Category[]; lessons: Lesson[] }> {
   const d = await db();
-  const [photos, categories] = await Promise.all([d.getAll("photos"), d.getAll("categories")]);
-  return { photos, categories };
+  const [photos, categories, lessons] = await Promise.all([d.getAll("photos"), d.getAll("categories"), d.getAll("lessons")]);
+  return { photos, categories, lessons };
+}
+
+export async function saveLessons(put: Lesson[], deleteIds: string[]) {
+  const tx = (await db()).transaction("lessons", "readwrite");
+  await Promise.all([...put.map((l) => tx.store.put(l)), ...deleteIds.map((id) => tx.store.delete(id)), tx.done]);
 }
 
 export async function putCategories(categories: Category[]) {

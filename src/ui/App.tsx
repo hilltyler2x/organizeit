@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { needsPerson } from "../core/library";
 import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
-import { SECTIONS, type Photo } from "../core/types";
+import { SECTIONS } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
-import { MoveDialog } from "./MoveDialog";
+import { ReviewView } from "./ReviewView";
 import { Thumb } from "./Thumb";
 
-type View = { kind: "overview" } | { kind: "category"; id: string };
+type View = { kind: "overview" } | { kind: "review" } | { kind: "category"; id: string };
 
 export function App() {
   const lib = useLibrary();
@@ -16,6 +17,7 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const usage = useMemo(() => usageByCategory(lib.categories, lib.photos), [lib.categories, lib.photos]);
   const category = view.kind === "category" ? lib.categories.find((c) => c.id === view.id) : undefined;
+  const toReview = useMemo(() => needsPerson(lib.photos).length, [lib.photos]);
 
   // A category the AI created disappears once emptied; fall back to the overview.
   useEffect(() => {
@@ -62,6 +64,12 @@ export function App() {
           <button className={`nav-item ${view.kind === "overview" ? "active" : ""}`} onClick={() => open({ kind: "overview" })}>
             Overview
           </button>
+          {(toReview > 0 || view.kind === "review") && (
+            <button className={`nav-item review-item ${view.kind === "review" ? "active" : ""}`} onClick={() => open({ kind: "review" })}>
+              <span>To review</span>
+              <span className="count">{toReview || ""}</span>
+            </button>
+          )}
           {SECTIONS.map((s) => {
             const items = usage.filter((u) => u.category.section === s.id);
             if (items.length === 0) return null;
@@ -88,10 +96,12 @@ export function App() {
             <p className="muted">Loading your library…</p>
           ) : lib.native && lib.permission !== "granted" && lib.permission !== "limited" ? (
             <ConnectLibrary lib={lib} />
+          ) : view.kind === "review" ? (
+            <ReviewView lib={lib} onDone={() => open({ kind: "overview" })} />
           ) : category ? (
             <CategoryView lib={lib} category={category} onGone={() => open({ kind: "overview" })} />
           ) : (
-            <Overview lib={lib} usage={usage} onOpen={(id) => open({ kind: "category", id })} onAdd={add} />
+            <Overview lib={lib} usage={usage} onOpen={(id) => open({ kind: "category", id })} onReview={() => open({ kind: "review" })} onAdd={add} />
           )}
         </main>
       </div>
@@ -100,7 +110,7 @@ export function App() {
   );
 }
 
-function Overview({ lib, usage, onOpen, onAdd }: { lib: Library; usage: CategoryUsage[]; onOpen: (id: string) => void; onAdd: (folder?: boolean) => void }) {
+function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage: CategoryUsage[]; onOpen: (id: string) => void; onReview: () => void; onAdd: (folder?: boolean) => void }) {
   const sections = usageBySection(usage);
   const total = usage.reduce((n, u) => n + u.bytes, 0);
   const used = usage.filter((u) => u.count > 0);
@@ -108,7 +118,7 @@ function Overview({ lib, usage, onOpen, onAdd }: { lib: Library; usage: Category
 
   return (
     <div className="overview">
-      <QueuePanel lib={lib} />
+      <QueuePanel lib={lib} onReview={onReview} />
 
       {lib.native && SORT_LIMIT > 0 && (
         <p className="muted small">Test mode: sorting your newest {SORT_LIMIT.toLocaleString()} photos.</p>
@@ -200,12 +210,12 @@ function ConnectLibrary({ lib }: { lib: Library }) {
   );
 }
 
-function QueuePanel({ lib }: { lib: Library }) {
+function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
-  const failed = lib.photos.filter((p) => p.status === "error");
-  const [fixing, setFixing] = useState<Photo[] | null>(null);
+  const waiting = needsPerson(lib.photos);
+  const failed = waiting.filter((p) => p.status === "error");
   const connecting = lib.server === "checking" || lib.server === "offline";
-  if (!pending.length && !failed.length && lib.server === "ok" && !lib.locked && !lib.scan) return null;
+  if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan) return null;
 
   return (
     <div className="queue">
@@ -239,35 +249,24 @@ function QueuePanel({ lib }: { lib: Library }) {
           <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
         </div>
       )}
-      {failed.length > 0 && (
+      {waiting.length > 0 && (
         <div className="queue-failed">
           <p>
-            <strong>{failed.length} couldn't be sorted automatically.</strong> Retry, or pick their categories yourself.
+            <strong>{waiting.length.toLocaleString()} photo{waiting.length === 1 ? "" : "s"} need{waiting.length === 1 ? "s" : ""} your help.</strong>{" "}
+            OrganizeIt wasn't sure where {waiting.length === 1 ? "it goes" : "they go"}. Your answers teach it for next time.
           </p>
           <ul className="mini-grid">
-            {failed.slice(0, 12).map((p) => (
-              <li key={p.id} title={p.error}>
-                <Thumb photo={p} alt={p.fileName} />
+            {waiting.slice(0, 12).map((p) => (
+              <li key={p.id} title={p.error ?? p.label}>
+                <Thumb photo={p} alt={p.label ?? p.fileName} />
               </li>
             ))}
           </ul>
           <div className="row">
-            <button onClick={() => lib.retry(failed.map((p) => p.id))}>Retry all</button>
-            <button onClick={() => setFixing(failed)}>Choose category</button>
+            <button className="primary" onClick={onReview}>Review</button>
+            {failed.length > 0 && <button onClick={() => lib.retry(failed.map((p) => p.id))}>Retry {failed.length} failed</button>}
           </div>
         </div>
-      )}
-      {fixing && (
-        <MoveDialog
-          count={fixing.length}
-          categories={lib.categories}
-          defaultSection="products"
-          onClose={() => setFixing(null)}
-          onMove={async (target) => {
-            await lib.move(fixing.map((p) => p.id), target);
-            setFixing(null);
-          }}
-        />
       )}
     </div>
   );

@@ -54,8 +54,16 @@ The passcode keeps strangers from using your Anthropic credits, and each IP is c
    (to any category or a new one), bulk delete, rename or merge categories. Categories the AI
    created are removed automatically once they're empty; the starting ones stay.
 
-Photos waiting to be sorted, or that failed, are shown in a "Sorting…" panel with Retry and
-"Choose category" buttons. That panel is a to-do list, not a category.
+Photos waiting to be sorted are shown in a "Sorting…" panel. When the AI isn't confident
+(below 60%), or sorting fails, the photo goes to **To review** instead of being filed. There
+you tap one photo to pick its category (the AI's guess is a one-tap answer), or select
+several and send them to the same place, existing or new. To review is a to-do list, not a
+category: every photo leaves it by being filed into a real, specific category.
+
+**Learning.** Each time you file a photo the AI was unsure about, or move one it filed, the
+AI's description of it and the category you chose are saved on the device
+(`src/core/lessons.ts`). The newest 60 are sent with every sort as examples ("black slides →
+Sandals, not Sneakers"), so the AI gets better at telling your categories apart.
 
 ## Layout
 

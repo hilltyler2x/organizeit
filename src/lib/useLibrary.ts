@@ -9,7 +9,8 @@ import {
   type Change,
   type LibraryState,
 } from "../core/library";
-import type { Photo, Section } from "../core/types";
+import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
+import type { Lesson, Photo, Section } from "../core/types";
 import { ApiError, classify, hasPasscode, serverStatus, unlock } from "./api";
 import * as store from "./db";
 import { decode, resize } from "./image";
@@ -34,6 +35,8 @@ export function useLibrary() {
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const stateRef = useRef(state);
+  const lessonsRef = useRef<Lesson[]>([]);
+  const [lessonCount, setLessonCount] = useState(0);
   const running = useRef(new Set<string>());
   const attempts = useRef(new Map<string, number>());
 
@@ -59,7 +62,9 @@ export function useLibrary() {
   // Load from disk; seed the starting categories on first run.
   useEffect(() => {
     (async () => {
-      let { photos, categories } = await store.loadAll();
+      let { photos, categories, lessons } = await store.loadAll();
+      lessonsRef.current = lessons;
+      setLessonCount(lessons.length);
       if (categories.length === 0) {
         categories = seedCategories(newId);
         await store.putCategories(categories);
@@ -116,6 +121,7 @@ export function useLibrary() {
         height: photo.height,
         isScreenshot: photo.isScreenshot ?? false,
         categories: stateRef.current.categories,
+        lessons: lessonsForPrompt(lessonsRef.current, stateRef.current.categories),
       });
       await commit(applyClassification(stateRef.current, photo.id, result, newId));
     } catch (err) {
@@ -250,6 +256,20 @@ export function useLibrary() {
     }
   }, []);
 
+  /** Moves photos and remembers any correction so later sorts get it right on their own. */
+  const move = useCallback(async (ids: string[], target: { categoryId: string } | { section: Section; name: string }) => {
+    const before = stateRef.current;
+    const change = movePhotos(before, ids, target, newId);
+    await commit(change);
+    const learned = lessonsFromMove(before, change.state, ids, newId);
+    if (!learned.length) return;
+    const { lessons, dropped } = addLessons(lessonsRef.current, learned);
+    lessonsRef.current = lessons;
+    setLessonCount(lessons.length);
+    const keep = new Set(lessons.map((l) => l.id));
+    await store.saveLessons(learned.filter((l) => keep.has(l.id)), [...dropped, ...learned.filter((l) => !keep.has(l.id)).map((l) => l.id)]);
+  }, [commit]);
+
   const retry = useCallback(async (ids: string[]) => {
     for (const id of ids) {
       attempts.current.delete(id);
@@ -276,8 +296,8 @@ export function useLibrary() {
     },
     importPhotos,
     retry,
-    move: (ids: string[], target: { categoryId: string } | { section: Section; name: string }) =>
-      commit(movePhotos(stateRef.current, ids, target, newId)),
+    move,
+    lessonCount,
     remove,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };

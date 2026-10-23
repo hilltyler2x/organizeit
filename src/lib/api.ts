@@ -1,3 +1,4 @@
+import type { LessonForPrompt } from "../core/lessons";
 import type { Category, Classification } from "../core/types";
 
 // Base URL of the API server. Empty on the website (same origin); a native build sets
@@ -69,6 +70,7 @@ export async function classify(input: {
   height: number;
   isScreenshot: boolean;
   categories: Category[];
+  lessons: LessonForPrompt[];
 }): Promise<Classification> {
   let r: Response;
   try {

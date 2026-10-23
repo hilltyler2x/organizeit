@@ -15,6 +15,18 @@ export const ClassifyRequest = z.object({
   categories: z
     .array(z.object({ section: z.enum(["business", "products", "personal"]), name: z.string().max(80) }))
     .max(500),
+  // The person's own corrections, newest first, so the AI learns their categories.
+  lessons: z
+    .array(
+      z.object({
+        label: z.string().max(120),
+        section: z.enum(["business", "products", "personal"]),
+        category: z.string().max(80),
+        wrong: z.string().max(80).optional(),
+      }),
+    )
+    .max(100)
+    .default([]),
 });
 export type ClassifyRequest = z.infer<typeof ClassifyRequest>;
 
@@ -50,7 +62,11 @@ Then pick one category inside that section:
 - Never answer with a catch-all such as Other, Misc, Miscellaneous, Uncategorized, Unknown, General, Assorted, or Various, and never prefix a name with them. Even when unsure, name the most specific kind of thing you can see.
 - Product categories are by item type, not brand or color.
 
-The label is a few words describing the specific thing shown. Confidence is between 0 and 1.`;
+The label is a few words describing the specific thing shown.
+
+Confidence is between 0 and 1 and decides whether the person is asked to check your answer. Give below 0.6 when you can't really tell: the item is blurry, cut off or hidden, it could belong to two categories, or it isn't clear whether a screenshot is a business expense. Even then, give your best specific guess.
+
+You may be given corrections the person made to earlier sorts. They show how this person wants things filed and outrank your own judgement: when a photo looks like one of those items, use the category they chose, and avoid the mistake that was corrected.`;
 
 function categoryList(categories: ClassifyRequest["categories"]): string {
   const by: Record<Section, string[]> = { business: [], products: [], personal: [] };
@@ -58,6 +74,13 @@ function categoryList(categories: ClassifyRequest["categories"]): string {
   return (Object.keys(by) as Section[])
     .map((s) => `${s}: ${by[s].length ? by[s].join(", ") : "(none yet)"}`)
     .join("\n");
+}
+
+function lessonList(lessons: ClassifyRequest["lessons"]): string {
+  const usable = lessons.filter((l) => !isBannedCategoryName(l.category));
+  if (!usable.length) return "";
+  const lines = usable.map((l) => `- "${l.label}" → ${l.section} / ${l.category}${l.wrong ? ` (not ${l.wrong})` : ""}`);
+  return `Corrections this person made to earlier photos:\n${lines.join("\n")}\n\n`;
 }
 
 function hints(req: ClassifyRequest): string {
@@ -102,7 +125,7 @@ export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Pr
         { type: "image", source: { type: "base64", media_type: req.mediaType, data: req.image } },
         {
           type: "text",
-          text: `Existing categories by section:\n${categoryList(req.categories)}\n\n${hints(req)}\n\nClassify this photo.`,
+          text: `Existing categories by section:\n${categoryList(req.categories)}\n\n${lessonList(req.lessons)}${hints(req)}\n\nClassify this photo.`,
         },
       ],
     },

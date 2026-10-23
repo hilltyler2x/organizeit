@@ -46,7 +46,7 @@ export function App() {
       <header className="topbar">
         <button className="menu-toggle" aria-label="Categories" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>☰</button>
         <button className="brand" onClick={() => open({ kind: "overview" })}>
-          <span className="logo" aria-hidden>▦</span> OrganizeIt
+          <img className="logo" src="/icon.svg" alt="" /> OrganizeIt
         </button>
         <span className="spacer" />
         {!lib.native && (
@@ -179,7 +179,7 @@ function ConnectLibrary({ lib }: { lib: Library }) {
   const denied = lib.permission === "denied";
   return (
     <div className="welcome connect">
-      <div className="connect-icon" aria-hidden>▦</div>
+      <img className="connect-icon" src="/icon.svg" alt="" />
       <h1>{denied ? "Photos access is off" : "Let OrganizeIt sort your photos"}</h1>
       <p>
         OrganizeIt looks through your photo library, pulls receipts, invoices and order confirmations into Business Expenses,

@@ -1,0 +1,16 @@
+name: Probe server
+on:
+  push:
+    branches: [probe-server]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for i in 1 2 3; do
+            date -u
+            curl -sS -m 90 -i -H "Origin: capacitor://localhost" https://organizeit-93mu.onrender.com/api/health || true
+            echo; echo ---
+            sleep 5
+          done
+          curl -sS -m 30 -i -X OPTIONS -H "Origin: capacitor://localhost" https://organizeit-93mu.onrender.com/api/classify || true

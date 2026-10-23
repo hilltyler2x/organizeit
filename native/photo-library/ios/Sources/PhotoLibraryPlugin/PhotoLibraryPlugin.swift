@@ -2,7 +2,6 @@ import Capacitor
 import Foundation
 import Photos
 import UIKit
-import UniformTypeIdentifiers
 
 /// Gives OrganizeIt read and delete access to the iOS Photos library. Photos are read in
 /// place; nothing is copied out except small JPEG previews requested by the app.
@@ -69,23 +68,7 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func describe(_ asset: PHAsset) -> [String: Any] {
-        let resources = PHAssetResource.assetResources(for: asset)
-        let original = resources.first { $0.type == .photo } ?? resources.first
-        let bytes = (original?.value(forKey: "fileSize") as? NSNumber)?.int64Value ?? 0
-        var mimeType = "image/jpeg"
-        if let uti = original?.uniformTypeIdentifier, let type = UTType(uti), let mime = type.preferredMIMEType {
-            mimeType = mime
-        }
-        return [
-            "id": asset.localIdentifier,
-            "fileName": original?.originalFilename ?? "",
-            "width": asset.pixelWidth,
-            "height": asset.pixelHeight,
-            "createdAt": (asset.creationDate ?? Date()).timeIntervalSince1970 * 1000,
-            "bytes": bytes,
-            "mimeType": mimeType,
-            "isScreenshot": asset.mediaSubtypes.contains(.photoScreenshot)
-        ]
+        DeviceAsset(asset).dictionary
     }
 
     /// Returns a JPEG copy of a photo scaled so its longest side is at most `maxSide`.

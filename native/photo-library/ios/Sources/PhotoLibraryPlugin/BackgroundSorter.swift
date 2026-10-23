@@ -1,0 +1,498 @@
+import BackgroundTasks
+import Foundation
+import Photos
+import UIKit
+import UniformTypeIdentifiers
+
+// Sorts photos while OrganizeIt is closed. The app hands over a snapshot (server address,
+// passcode, categories, lessons, which photos are waiting) through BackgroundSortPlugin; this
+// sorts from that snapshot with plain Swift, since the web view isn't running, and keeps each
+// answer on disk until the app takes it back and files it.
+//
+// What iOS allows:
+// - iOS 26 and later: once there are photos waiting, a continued processing task is started
+//   while the app is open, so sorting carries on after it is closed, with progress shown by
+//   the system. The person can stop it from there.
+// - Any iOS: about 30 more seconds when the app is closed (a background task), plus
+//   background refresh and processing tasks that iOS runs when it chooses (often overnight
+//   while charging) to sort photos taken since. Nothing can run the instant a photo is taken,
+//   and nothing runs after the app is swiped away in the app switcher until iOS relaunches it.
+
+struct DeviceAsset: Codable {
+    var id: String
+    var fileName: String
+    var width: Int
+    var height: Int
+    var createdAt: Double
+    var bytes: Int64
+    var mimeType: String
+    var isScreenshot: Bool
+
+    init(_ asset: PHAsset) {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let original = resources.first { $0.type == .photo } ?? resources.first
+        var mimeType = "image/jpeg"
+        if let uti = original?.uniformTypeIdentifier, let type = UTType(uti), let mime = type.preferredMIMEType {
+            mimeType = mime
+        }
+        id = asset.localIdentifier
+        fileName = original?.originalFilename ?? ""
+        width = asset.pixelWidth
+        height = asset.pixelHeight
+        createdAt = (asset.creationDate ?? Date()).timeIntervalSince1970 * 1000
+        bytes = (original?.value(forKey: "fileSize") as? NSNumber)?.int64Value ?? 0
+        self.mimeType = mimeType
+        isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
+    }
+
+    var dictionary: [String: Any] {
+        [
+            "id": id, "fileName": fileName, "width": width, "height": height, "createdAt": createdAt,
+            "bytes": bytes, "mimeType": mimeType, "isScreenshot": isScreenshot
+        ]
+    }
+}
+
+struct CategoryName: Codable, Equatable {
+    var section: String
+    var name: String
+}
+
+struct LessonForPrompt: Codable {
+    var label: String
+    var section: String
+    var category: String
+    var wrong: String?
+}
+
+struct Classification: Codable {
+    var section: String
+    var category: String
+    var label: String
+    var confidence: Double
+}
+
+/// Matches src/lib/backgroundSort.ts.
+struct BackgroundSortConfig: Codable {
+    var apiUrl: String
+    var passcode: String
+    var categories: [CategoryName]
+    var lessons: [LessonForPrompt]
+    /// Photos waiting to be sorted, newest first.
+    var queued: [String]
+    /// Creation time (ms) of the newest photo the app knows about; anything newer is new.
+    var knownUpTo: Double
+}
+
+struct BackgroundResult: Codable {
+    var asset: DeviceAsset
+    var result: Classification
+}
+
+/// The snapshot and the answers, in one small file the app and background launches share.
+final class BackgroundSortStore {
+    private struct Contents: Codable {
+        var config: BackgroundSortConfig?
+        var results: [BackgroundResult] = []
+    }
+
+    private let lock = NSLock()
+    private let url: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OrganizeIt", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("background-sort.json")
+    }()
+
+    private func read() -> Contents {
+        guard let data = try? Data(contentsOf: url), let contents = try? JSONDecoder().decode(Contents.self, from: data) else {
+            return Contents()
+        }
+        return contents
+    }
+
+    private func write(_ contents: Contents) {
+        guard let data = try? JSONEncoder().encode(contents) else { return }
+        // Readable after the first unlock, so background tasks work while the phone is locked.
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    private func update<T>(_ body: (inout Contents) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        var contents = read()
+        let value = body(&contents)
+        write(contents)
+        return value
+    }
+
+    func load() -> (config: BackgroundSortConfig?, results: [BackgroundResult]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let contents = read()
+        return (contents.config, contents.results)
+    }
+
+    func save(config: BackgroundSortConfig) {
+        update { $0.config = config }
+    }
+
+    func add(_ result: BackgroundResult) {
+        update { contents in
+            contents.results.removeAll { $0.asset.id == result.asset.id }
+            contents.results.append(result)
+        }
+    }
+
+    /// Hands every saved answer to the app and forgets them.
+    func takeResults() -> [BackgroundResult] {
+        update { contents in
+            let results = contents.results
+            contents.results = []
+            return results
+        }
+    }
+}
+
+public final class BackgroundSorter {
+    public static let shared = BackgroundSorter()
+
+    let store = BackgroundSortStore()
+
+    private let bundleId = Bundle.main.bundleIdentifier ?? "com.organizeit.app"
+    private var refreshId: String { "\(bundleId).refresh" }
+    private var processingId: String { "\(bundleId).sort" }
+    private var continuedPrefix: String { "\(bundleId).continue" }
+
+    private let lock = NSLock()
+    private var running = false
+    private var active = true
+    private var continuedTask: AnyObject?
+    private var continuedTotal: Int64 = 0
+
+    /// True while the app is on screen; the app sorts by itself then.
+    var isAppActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+
+    private func setAppActive(_ value: Bool) {
+        lock.lock()
+        active = value
+        lock.unlock()
+    }
+
+    /// Call from application(_:didFinishLaunchingWithOptions:). iOS requires background tasks
+    /// to be registered before launch finishes.
+    public func registerTasks() {
+        setAppActive(UIApplication.shared.applicationState != .background)
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshId, using: nil) { [weak self] task in
+            self?.runScheduled(task)
+        }
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: processingId, using: nil) { [weak self] task in
+            self?.runScheduled(task)
+        }
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            BGTaskScheduler.shared.register(forTaskWithIdentifier: "\(continuedPrefix).*", using: nil) { [weak self] task in
+                guard let task = task as? BGContinuedProcessingTask else { return task.setTaskCompleted(success: false) }
+                self?.runContinued(task)
+            }
+        }
+        #endif
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.setAppActive(true)
+        }
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.setAppActive(false)
+            self.scheduleBackgroundTasks()
+            self.keepGoingAfterClose()
+        }
+    }
+
+    /// Asks iOS to wake the app now and then to sort photos taken since it was last open.
+    func scheduleBackgroundTasks() {
+        guard store.load().config != nil else { return }
+        let refresh = BGAppRefreshTaskRequest(identifier: refreshId)
+        refresh.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(refresh)
+        let processing = BGProcessingTaskRequest(identifier: processingId)
+        processing.requiresNetworkConnectivity = true
+        processing.requiresExternalPower = false
+        processing.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+        try? BGTaskScheduler.shared.submit(processing)
+    }
+
+    /// Called whenever the app sends a new snapshot. On iOS 26+, starts the continued task
+    /// that carries sorting on after the app is closed, or updates its progress.
+    func queueChanged(waiting: Int) {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            lock.lock()
+            let task = continuedTask as? BGContinuedProcessingTask
+            let alreadyStarted = continuedTask != nil
+            lock.unlock()
+            if let task = task {
+                report(task, waiting: waiting)
+                return
+            }
+            guard waiting > 0, !alreadyStarted, isAppActive else { return }
+            let request = BGContinuedProcessingTaskRequest(
+                identifier: "\(continuedPrefix).\(UUID().uuidString)",
+                title: "Sorting photos",
+                subtitle: "\(waiting) to go")
+            request.strategy = .fail // start now or not at all, so a stale request never blocks the next
+            do {
+                try BGTaskScheduler.shared.submit(request)
+                lock.lock()
+                continuedTask = NSNull() // submitted, waiting for iOS to start it
+                lock.unlock()
+            } catch {
+                NSLog("OrganizeIt: could not start background sorting: \(error)")
+            }
+        }
+        #endif
+    }
+
+    // MARK: - Running
+
+    enum Outcome {
+        /// Nothing is left to sort.
+        case finished
+        /// Asked to stop (time is up, or the app came back).
+        case stopped
+        /// Can't sort right now: no access, no server, wrong passcode, or the AI is busy.
+        case blocked
+        /// Another run is already sorting.
+        case busy
+    }
+
+    private func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if running { return false }
+        running = true
+        return true
+    }
+
+    private func release() {
+        lock.lock()
+        running = false
+        lock.unlock()
+    }
+
+    /// Sorts waiting photos, a few at a time, until none are left or `shouldStop` says so.
+    /// `progress` is told how many are still waiting after each batch.
+    func run(shouldStop: @escaping () -> Bool, progress: ((Int) -> Void)? = nil) async -> Outcome {
+        guard claim() else { return .busy }
+        defer { release() }
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return .blocked }
+        guard let first = store.load().config, !first.apiUrl.isEmpty else { return .blocked }
+        var categories = first.categories
+        var skip = Set<String>()
+        while !shouldStop() {
+            // Re-read each round: the app may have sent a newer snapshot.
+            let (stored, results) = store.load()
+            guard let config = stored else { return .blocked }
+            for c in config.categories where !categories.contains(c) { categories.append(c) }
+            skip.formUnion(results.map { $0.asset.id })
+            let (batch, waiting) = nextBatch(config, skipping: skip, size: 3)
+            if batch.isEmpty { return .finished }
+            var blocked = false
+            await withTaskGroup(of: (PHAsset, Result<Classification, SortError>).self) { group in
+                for asset in batch {
+                    let cats = categories
+                    group.addTask { (asset, await self.classify(asset, config: config, categories: cats)) }
+                }
+                for await (asset, outcome) in group {
+                    skip.insert(asset.localIdentifier)
+                    switch outcome {
+                    case .success(let result):
+                        store.add(BackgroundResult(asset: DeviceAsset(asset), result: result))
+                        // Same threshold as REVIEW_BELOW in src/core/library.ts.
+                        let named = CategoryName(section: result.section, name: result.category)
+                        if result.confidence >= 0.6 && !categories.contains(named) { categories.append(named) }
+                    case .failure(.blocked):
+                        blocked = true
+                    case .failure(.skip):
+                        break // left for the app, which retries and shows errors
+                    }
+                }
+            }
+            if blocked { return .blocked }
+            progress?(max(0, waiting - batch.count))
+        }
+        return .stopped
+    }
+
+    /// The next photos to sort: ones the app queued, then ones taken since it was last open.
+    private func nextBatch(_ config: BackgroundSortConfig, skipping skip: Set<String>, size: Int) -> ([PHAsset], Int) {
+        let queued = config.queued.filter { !skip.contains($0) }
+        let queuedSet = Set(config.queued)
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate)
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.fetchLimit = 500
+        var fresh: [PHAsset] = []
+        PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
+            if !skip.contains(asset.localIdentifier) && !queuedSet.contains(asset.localIdentifier) { fresh.append(asset) }
+        }
+        var batch: [PHAsset] = []
+        if !queued.isEmpty {
+            let wanted = Array(queued.prefix(size * 2))
+            let found = PHAsset.fetchAssets(withLocalIdentifiers: wanted, options: nil)
+            var byId: [String: PHAsset] = [:]
+            found.enumerateObjects { asset, _, _ in byId[asset.localIdentifier] = asset }
+            batch = wanted.compactMap { byId[$0] }.prefix(size).map { $0 }
+        }
+        for asset in fresh where batch.count < size { batch.append(asset) }
+        return (batch, queued.count + fresh.count)
+    }
+
+    enum SortError: Error {
+        case blocked
+        case skip
+    }
+
+    private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName]) async -> Result<Classification, SortError> {
+        guard let jpeg = await image(asset, maxSide: 1024, quality: 0.8) else { return .failure(.skip) }
+        let info = DeviceAsset(asset)
+        let body: [String: Any] = [
+            "image": jpeg.base64EncodedString(),
+            "mediaType": "image/jpeg",
+            "fileName": String(info.fileName.prefix(300)),
+            "width": info.width,
+            "height": info.height,
+            "isScreenshot": info.isScreenshot,
+            "categories": categories.map { ["section": $0.section, "name": $0.name] },
+            "lessons": config.lessons.map { lesson -> [String: Any] in
+                var l: [String: Any] = ["label": lesson.label, "section": lesson.section, "category": lesson.category]
+                if let wrong = lesson.wrong { l["wrong"] = wrong }
+                return l
+            }
+        ]
+        guard let url = URL(string: config.apiUrl + "/api/classify"),
+              let payload = try? JSONSerialization.data(withJSONObject: body) else { return .failure(.blocked) }
+        var request = URLRequest(url: url, timeoutInterval: 90) // the free server can take a minute to wake
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(config.passcode, forHTTPHeaderField: "x-organizeit-passcode")
+        request.httpBody = payload
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 200, let result = try? JSONDecoder().decode(Classification.self, from: data) { return .success(result) }
+            // Wrong passcode, no AI key, or rate limited: stop and let the app deal with it.
+            return [401, 429, 503].contains(code) ? .failure(.blocked) : .failure(.skip)
+        } catch {
+            return .failure(.blocked) // offline, server asleep, or cancelled
+        }
+    }
+
+    private func image(_ asset: PHAsset, maxSide: CGFloat, quality: CGFloat) async -> Data? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let scale = min(1, maxSide / CGFloat(max(asset.pixelWidth, asset.pixelHeight, 1)))
+                let target = CGSize(width: CGFloat(asset.pixelWidth) * scale, height: CGFloat(asset.pixelHeight) * scale)
+                let options = PHImageRequestOptions()
+                options.isSynchronous = true
+                options.deliveryMode = .highQualityFormat
+                options.resizeMode = .exact
+                options.isNetworkAccessAllowed = true
+                var data: Data?
+                PHImageManager.default().requestImage(for: asset, targetSize: target, contentMode: .aspectFit, options: options) { image, _ in
+                    data = image?.jpegData(compressionQuality: quality)
+                }
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    // MARK: - The ways iOS lets it run
+
+    /// Background refresh and processing tasks: iOS picks the time.
+    private func runScheduled(_ task: BGTask) {
+        scheduleBackgroundTasks()
+        let work = Task {
+            let outcome = await self.run(shouldStop: { Task.isCancelled })
+            task.setTaskCompleted(success: outcome != .blocked)
+        }
+        task.expirationHandler = { work.cancel() }
+    }
+
+    /// The extra half minute or so iOS gives an app that was just closed. Skipped when the
+    /// continued task (iOS 26+) is already carrying on.
+    private func keepGoingAfterClose() {
+        lock.lock()
+        let continuing = continuedTask != nil
+        lock.unlock()
+        guard !continuing, let config = store.load().config, !config.queued.isEmpty else { return }
+        final class Holder { var id = UIBackgroundTaskIdentifier.invalid }
+        let holder = Holder()
+        let finish = {
+            DispatchQueue.main.async {
+                guard holder.id != .invalid else { return }
+                UIApplication.shared.endBackgroundTask(holder.id)
+                holder.id = .invalid
+            }
+        }
+        let work = Task {
+            _ = await self.run(shouldStop: { Task.isCancelled || self.isAppActive })
+            finish()
+        }
+        holder.id = UIApplication.shared.beginBackgroundTask(withName: "Sort photos") {
+            work.cancel()
+            finish()
+        }
+    }
+
+    #if compiler(>=6.2)
+    @available(iOS 26.0, *)
+    private func report(_ task: BGContinuedProcessingTask, waiting: Int) {
+        lock.lock()
+        continuedTotal = max(continuedTotal, Int64(task.progress.completedUnitCount) + Int64(waiting))
+        let total = continuedTotal
+        lock.unlock()
+        task.progress.totalUnitCount = max(total, 1)
+        task.progress.completedUnitCount = total - Int64(waiting)
+        task.updateTitle("Sorting photos", subtitle: waiting == 1 ? "1 to go" : "\(waiting) to go")
+    }
+
+    /// iOS 26+: keeps sorting after the app is closed, with progress shown by the system.
+    /// While the app is open it sorts by itself, so this only follows along.
+    @available(iOS 26.0, *)
+    private func runContinued(_ task: BGContinuedProcessingTask) {
+        lock.lock()
+        continuedTask = task
+        continuedTotal = 0
+        lock.unlock()
+        let work = Task {
+            var success = true
+            while !Task.isCancelled {
+                if self.isAppActive {
+                    let waiting = self.store.load().config?.queued.count ?? 0
+                    self.report(task, waiting: waiting)
+                    if waiting == 0 { break }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+                let outcome = await self.run(shouldStop: { Task.isCancelled || self.isAppActive }) { waiting in
+                    self.report(task, waiting: waiting)
+                }
+                if outcome == .finished { break }
+                if outcome == .blocked { success = false; break }
+                if outcome == .busy { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+            }
+            self.lock.lock()
+            self.continuedTask = nil
+            self.lock.unlock()
+            task.setTaskCompleted(success: success)
+        }
+        task.expirationHandler = { work.cancel() }
+    }
+    #endif
+}

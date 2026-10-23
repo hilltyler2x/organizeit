@@ -3,7 +3,7 @@ import type { Category, Classification } from "../core/types";
 
 // Base URL of the API server. Empty on the website (same origin); a native build sets
 // VITE_API_URL to the deployed server.
-const API = import.meta.env.VITE_API_URL ?? "";
+export const API = import.meta.env.VITE_API_URL ?? "";
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
@@ -26,6 +26,11 @@ let passcode = (() => {
 
 export function hasPasscode() {
   return passcode !== "";
+}
+
+/** The remembered passcode, handed to the phone so it can sort while the app is closed. */
+export function currentPasscode() {
+  return passcode;
 }
 
 export type ServerStatus = { reachable: boolean; ai: boolean; passcodeRequired: boolean };

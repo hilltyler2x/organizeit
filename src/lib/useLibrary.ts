@@ -9,9 +9,11 @@ import {
   type Change,
   type LibraryState,
 } from "../core/library";
+import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import type { Lesson, Photo, Section } from "../core/types";
-import { ApiError, classify, hasPasscode, serverStatus, unlock } from "./api";
+import { API, ApiError, classify, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
+import { BackgroundSort } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
@@ -155,9 +157,15 @@ export function useLibrary() {
     }
   }, [commit, patchPhoto]);
 
+  // Reading the phone's library also collects what was sorted while the app was closed, so
+  // the queue waits for it rather than sorting those photos a second time.
+  const scanning = useRef(false);
+  // Until the library has been read once, the app can't tell the phone which photos are new.
+  const scanned = useRef(false);
+
   // Work through the queue a few photos at a time, newest first.
   const pump = useCallback(() => {
-    if (!ai || locked) return;
+    if (!ai || locked || scanning.current) return;
     const free = CONCURRENCY - running.current.size;
     if (free <= 0) return;
     const queued = stateRef.current.photos
@@ -176,9 +184,8 @@ export function useLibrary() {
     if (ready) pump();
   }, [ready, pump, state]);
 
-  // Reads the phone's whole library and queues anything new. Runs on launch and whenever
-  // the app comes back to the foreground.
-  const scanning = useRef(false);
+  // Reads the phone's whole library and queues anything new, then files whatever the phone
+  // sorted in the background. Runs on launch and whenever the app comes back to the foreground.
   const scanDevice = useCallback(async () => {
     if (!isNativeApp || scanning.current) return;
     scanning.current = true;
@@ -190,11 +197,15 @@ export function useLibrary() {
       let assets = await listAllAssets((done, total) => setScan({ done, total }));
       if (SORT_LIMIT) assets = assets.sort((a, b) => b.createdAt - a.createdAt).slice(0, SORT_LIMIT);
       await commit(syncWithDevice(stateRef.current, assets, newId));
+      const { results } = await BackgroundSort.takeResults().catch(() => ({ results: [] }));
+      if (results.length) await commit(applyBackgroundResults(stateRef.current, results, newId));
+      scanned.current = true;
     } finally {
       setScan(null);
       scanning.current = false;
+      pump();
     }
-  }, [commit]);
+  }, [commit, pump]);
 
   useEffect(() => {
     if (!ready || !isNativeApp) return;
@@ -203,6 +214,34 @@ export function useLibrary() {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [ready, scanDevice]);
+
+  // Hand the phone what it needs to keep sorting once the app is closed: the queue, the
+  // categories and the lessons. Sent shortly after anything changes, and right away when the
+  // app is being closed.
+  const syncBackground = useCallback(() => {
+    if (!isNativeApp || !API || !scanned.current) return;
+    const s = stateRef.current;
+    BackgroundSort.configure({
+      apiUrl: API,
+      passcode: currentPasscode(),
+      categories: s.categories.map((c) => ({ section: c.section, name: c.name })),
+      lessons: lessonsForPrompt(lessonsRef.current, s.categories),
+      ...backgroundQueue(s),
+    }).catch((err) => console.warn("Background sorting is unavailable:", err));
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !isNativeApp) return;
+    const timer = setTimeout(syncBackground, 1500);
+    return () => clearTimeout(timer);
+  }, [ready, state, lessonCount, locked, syncBackground]);
+
+  useEffect(() => {
+    if (!isNativeApp) return;
+    const onHidden = () => document.visibilityState === "hidden" && syncBackground();
+    document.addEventListener("visibilitychange", onHidden);
+    return () => document.removeEventListener("visibilitychange", onHidden);
+  }, [syncBackground]);
 
   const connectLibrary = useCallback(async () => {
     const { status } = await PhotoLibrary.requestPermission();

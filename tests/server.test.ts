@@ -123,3 +123,24 @@ describe("CORS for the phone app", () => {
     }
   });
 });
+
+describe("learning from corrections", () => {
+  it("passes the person's corrections to the AI", async () => {
+    const { client, calls } = fakeClient([{ section: "products", category: "Sandals", label: "slides", confidence: 0.9 }]);
+    const lessons = [
+      { label: "black slides", section: "products", category: "Sandals", wrong: "Sneakers" },
+      { label: "junk", section: "products", category: "Misc" },
+    ];
+    const r = await post(createApp(client), { ...req, lessons });
+    expect(r.status).toBe(200);
+    const text = calls[0].messages[0].content[1].text;
+    expect(text).toContain('"black slides" → products / Sandals (not Sneakers)');
+    expect(text).not.toContain("Misc");
+  });
+
+  it("still works without corrections", async () => {
+    const { client, calls } = fakeClient([{ section: "products", category: "Bags", label: "tote", confidence: 0.9 }]);
+    await post(createApp(client), req);
+    expect(calls[0].messages[0].content[1].text).not.toContain("Corrections");
+  });
+});

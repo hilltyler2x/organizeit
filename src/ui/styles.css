@@ -211,3 +211,16 @@ main { padding: 24px 24px 120px; min-width: 0; }
   .viewer { grid-template-columns: 1fr; }
   .viewer-image img { max-height: 55vh; }
 }
+
+/* To review: a to-do list for photos the AI wasn't sure about, not a category. */
+.nav-item.review-item { color: var(--accent); font-weight: 600; }
+.guess-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 14px; }
+.guess { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
+.chip.primary .small { font-weight: 400; opacity: 0.85; }
+.move-preview { list-style: none; padding: 0; margin: 0 0 14px; display: flex; gap: 6px; flex-wrap: wrap; }
+.move-preview li { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--surface-2); }
+.move-preview.single li { width: 100%; height: auto; max-height: 260px; aspect-ratio: auto; }
+.move-preview.single img { width: 100%; height: auto; max-height: 260px; object-fit: contain; }
+.move-preview img { width: 100%; height: 100%; object-fit: cover; }
+.review-view .caption { display: block; }
+.review-view .bulk-bar { flex-wrap: wrap; justify-content: flex-end; }

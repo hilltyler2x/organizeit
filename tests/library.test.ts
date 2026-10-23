@@ -34,7 +34,7 @@ describe("library", () => {
 
   it("never files into a catch-all", () => {
     const s = start(photo("a"));
-    expect(() => applyClassification(s, "a", { section: "products", category: "Other", label: "?", confidence: 0.2 }, newId)).toThrow();
+    expect(() => applyClassification(s, "a", { section: "products", category: "Other", label: "?", confidence: 0.9 }, newId)).toThrow();
     expect(() => movePhotos(s, ["a"], { section: "products", name: "Misc" }, newId)).toThrow();
   });
 

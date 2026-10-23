@@ -1,5 +1,5 @@
 import { emptyCreatedCategories } from "./storage";
-import { resolveCategory } from "./categories";
+import { isBannedCategoryName, resolveCategory } from "./categories";
 import type { Category, Classification, Photo, Section } from "./types";
 
 /** One photo as the device's photo library reports it. */
@@ -42,14 +42,31 @@ function finish(prev: LibraryState, photos: Photo[], categories: Category[], put
   };
 }
 
-/** Files a classified photo, creating its category if needed. Throws on catch-all names. */
+/** Below this confidence the person is asked to pick the category instead of the AI. */
+export const REVIEW_BELOW = 0.6;
+
+/**
+ * Files a classified photo, creating its category if needed. Throws on catch-all names. When
+ * the AI isn't confident the photo waits for the person to choose, with the AI's guess kept
+ * as a suggestion; no category is created for a guess.
+ */
 export function applyClassification(state: LibraryState, photoId: string, result: Classification, newId: () => string): Change {
+  if (result.confidence < REVIEW_BELOW) {
+    const suggestion = isBannedCategoryName(result.category) ? undefined : { section: result.section, category: result.category };
+    let updated: Photo | undefined;
+    const photos = state.photos.map((p) => {
+      if (p.id !== photoId) return p;
+      updated = { ...p, status: "review", categoryId: undefined, label: result.label, confidence: result.confidence, suggestion, error: undefined };
+      return updated;
+    });
+    return finish(state, photos, state.categories, updated ? [updated] : [], []);
+  }
   const { category, created } = resolveCategory(state.categories, result.section, result.category, newId);
   const categories = created ? [...state.categories, category] : state.categories;
   let updated: Photo | undefined;
   const photos = state.photos.map((p) => {
     if (p.id !== photoId) return p;
-    updated = { ...p, status: "sorted", categoryId: category.id, label: result.label, confidence: result.confidence, error: undefined };
+    updated = { ...p, status: "sorted", categoryId: category.id, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
     return updated;
   });
   return finish(state, photos, categories, updated ? [updated] : [], created ? [category] : []);
@@ -79,12 +96,17 @@ export function movePhotos(
   const changed: Photo[] = [];
   const photos = state.photos.map((p) => {
     if (!ids.has(p.id)) return p;
-    const next: Photo = { ...p, status: "sorted", categoryId: category.id, error: undefined };
+    const next: Photo = { ...p, status: "sorted", categoryId: category.id, suggestion: undefined, error: undefined };
     changed.push(next);
     return next;
   });
   const categories = created ? [...state.categories, category] : state.categories;
   return finish(state, photos, categories, changed, created ? [category] : []);
+}
+
+/** Photos waiting for the person: the AI wasn't sure, or sorting failed. */
+export function needsPerson(photos: Photo[]): Photo[] {
+  return photos.filter((p) => p.status === "review" || p.status === "error").sort((a, b) => b.takenAt - a.takenAt);
 }
 
 export function removePhotos(state: LibraryState, photoIds: string[]): Change {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { needsPerson } from "../core/library";
 import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
@@ -15,6 +15,7 @@ export function App() {
   const [view, setView] = useState<View>({ kind: "overview" });
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
   const usage = useMemo(() => usageByCategory(lib.categories, lib.photos), [lib.categories, lib.photos]);
   const category = view.kind === "category" ? lib.categories.find((c) => c.id === view.id) : undefined;
   const toReview = useMemo(() => needsPerson(lib.photos).length, [lib.photos]);
@@ -28,7 +29,7 @@ export function App() {
   const open = (v: View) => {
     setView(v);
     setMenuOpen(false);
-    window.scrollTo(0, 0);
+    mainRef.current?.scrollTo(0, 0);
   };
 
   return (
@@ -90,8 +91,9 @@ export function App() {
             );
           })}
         </nav>
+        {menuOpen && <button className="scrim" aria-label="Close categories" onClick={() => setMenuOpen(false)} />}
 
-        <main>
+        <main ref={mainRef}>
           {!lib.ready || (lib.native && lib.permission === null) ? (
             <p className="muted">Loading your library…</p>
           ) : lib.native && lib.permission !== "granted" && lib.permission !== "limited" ? (

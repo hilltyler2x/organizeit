@@ -285,10 +285,17 @@ export function useLibrary() {
   }, [ready, pump, state]);
 
   // Reads the phone's whole library and queues anything new, then files whatever the phone
-  // sorted in the background. Runs on launch and whenever the app comes back to the foreground.
-  const scanDevice = useCallback(async () => {
-    if (!isNativeApp || scanning.current) return;
+  // sorted in the background. Runs on launch, whenever the app comes back to the foreground,
+  // and as soon as a photo is added while it is open. A change during a scan scans again after.
+  const rescan = useRef(false);
+  const scanDevice = useCallback(async (): Promise<void> => {
+    if (!isNativeApp) return;
+    if (scanning.current) {
+      rescan.current = true;
+      return;
+    }
     scanning.current = true;
+    rescan.current = false;
     try {
       const { status } = await PhotoLibrary.checkPermission();
       setPermission(status);
@@ -306,6 +313,7 @@ export function useLibrary() {
       scanning.current = false;
       pump();
     }
+    if (rescan.current) return scanDevice();
   }, [commit, pump]);
 
   useEffect(() => {
@@ -313,7 +321,18 @@ export function useLibrary() {
     scanDevice();
     const onVisible = () => document.visibilityState === "visible" && scanDevice();
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    // New photo taken (or one deleted) while the app is open: sort it right away. Changes
+    // arriving close together (a burst of shots) are gathered into one scan.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const listener = PhotoLibrary.addListener("libraryChanged", () => {
+      clearTimeout(timer);
+      timer = setTimeout(scanDevice, 1500);
+    });
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearTimeout(timer);
+      listener.then((l) => l.remove(), () => undefined);
+    };
   }, [ready, scanDevice]);
 
   // Hand the phone what it needs to keep sorting once the app is closed: the queue, the

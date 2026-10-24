@@ -4,17 +4,24 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.IntentSenderRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
@@ -25,6 +32,10 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -32,8 +43,9 @@ import java.util.concurrent.Executors;
 import org.json.JSONException;
 
 /**
- * Gives OrganizeIt read and delete access to the Android photo library through MediaStore.
- * Photos are read in place; nothing is copied out except small JPEG previews.
+ * Gives OrganizeIt read, delete, copy and share access to the Android photo library through
+ * MediaStore. Photos are read in place; nothing is copied out except small JPEG previews and
+ * the one photo being copied or shared.
  */
 @CapacitorPlugin(
     name = "PhotoLibrary",
@@ -52,9 +64,24 @@ public class PhotoLibraryPlugin extends Plugin {
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
     private ActivityResultLauncher<IntentSenderRequest> deleteLauncher;
     private PluginCall pendingDelete;
+    private ContentObserver libraryObserver;
+
+    @Override
+    protected void handleOnDestroy() {
+        if (libraryObserver != null) getContext().getContentResolver().unregisterContentObserver(libraryObserver);
+    }
 
     @Override
     public void load() {
+        // Tell the app the moment a photo is added or removed while it is running, so a new
+        // photo is sorted right away (event "libraryChanged").
+        libraryObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                notifyListeners("libraryChanged", new JSObject());
+            }
+        };
+        getContext().getContentResolver().registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, libraryObserver);
         deleteLauncher = getActivity()
             .registerForActivityResult(new ActivityResultContracts.StartIntentSenderForResult(), (result) -> {
                 if (pendingDelete == null) return;
@@ -220,5 +247,87 @@ public class PhotoLibraryPlugin extends Plugin {
     private void askToDelete(PluginCall call, android.content.IntentSender sender) {
         pendingDelete = call;
         getActivity().runOnUiThread(() -> deleteLauncher.launch(new IntentSenderRequest.Builder(sender).build()));
+    }
+
+    /**
+     * Puts a copy of the photo in the app's cache and returns a content URI other apps may
+     * read. Only the latest copied or shared photo is kept.
+     */
+    private Uri shareableCopy(String id) throws Exception {
+        Uri source = uriFor(id);
+        String name = "Photo.jpg";
+        String[] cols = { MediaStore.Images.Media.DISPLAY_NAME };
+        try (Cursor c = getContext().getContentResolver().query(source, cols, null, null, null)) {
+            if (c == null || !c.moveToFirst()) throw new Exception("That photo is no longer on this phone");
+            String n = c.getString(0);
+            if (n != null && !n.trim().isEmpty()) name = n.replaceAll("[/\\\\]", "_");
+        }
+        File dir = new File(getContext().getCacheDir(), "shared");
+        File[] old = dir.listFiles();
+        if (old != null) for (File f : old) f.delete();
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("Could not prepare the photo");
+        File file = new File(dir, name);
+        try (InputStream in = getContext().getContentResolver().openInputStream(source); OutputStream out = new FileOutputStream(file)) {
+            if (in == null) throw new Exception("Could not load photo");
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+        return FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", file);
+    }
+
+    private String mimeOf(Uri uri) {
+        String type = getContext().getContentResolver().getType(uri);
+        return type == null ? "image/*" : type;
+    }
+
+    /** Copies a photo so it can be pasted into other apps. */
+    @PluginMethod
+    public void copyImage(PluginCall call) {
+        String id = call.getString("id");
+        if (id == null) {
+            call.reject("Missing id");
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                Uri uri = shareableCopy(id);
+                getActivity().runOnUiThread(() -> {
+                    ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                    clipboard.setPrimaryClip(ClipData.newUri(getContext().getContentResolver(), "Photo", uri));
+                    call.resolve();
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage() == null ? "Could not copy photo" : e.getMessage(), e);
+            }
+        });
+    }
+
+    /** Opens Android's share sheet for a photo. */
+    @PluginMethod
+    public void shareImage(PluginCall call) {
+        String id = call.getString("id");
+        if (id == null) {
+            call.reject("Missing id");
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                Uri uri = shareableCopy(id);
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType(mimeOf(uri));
+                send.putExtra(Intent.EXTRA_STREAM, uri);
+                send.setClipData(ClipData.newRawUri("", uri)); // shows the photo in the share sheet
+                send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                getActivity().runOnUiThread(() -> {
+                    getActivity().startActivity(Intent.createChooser(send, null));
+                    JSObject ret = new JSObject();
+                    ret.put("completed", true);
+                    call.resolve(ret);
+                });
+            } catch (Exception e) {
+                call.reject(e.getMessage() == null ? "Could not share photo" : e.getMessage(), e);
+            }
+        });
     }
 }

@@ -104,17 +104,20 @@ the answers in a small file. Next time the app opens it reads the library, then 
 answers through the same rules as its own queue (`src/core/background.ts`), so photos the AI
 was unsure about still go to To review and the core rule still holds.
 
+- **While the app is open (or still running):** a new photo is noticed the moment it lands
+  in the library (PhotoKit change observer / Android ContentObserver) and sorted right away.
 - **iPhone, iOS 26 or later:** when photos are waiting, a continued processing task starts
   while the app is open. Close the app and sorting carries on, with progress shown by iOS,
   which can be stopped from there. While the app is open it sorts by itself and the task only
-  follows along.
+  follows along. Once everything is sorted it keeps watching for new photos for 5 more
+  minutes before ending.
 - **Any iPhone:** about 30 seconds of extra time right after closing, plus background refresh
   and processing tasks that iOS runs when it chooses (often overnight while charging) to sort
   photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
   an app that was swiped away in the app switcher until it is opened again. Background App
   Refresh must be on for OrganizeIt in Settings.
 - **Android:** a "Sorting photos" notification (a foreground service) keeps sorting after
-  the app is closed; new photos are sorted about 30 seconds after they are added, and hourly
+  the app is closed; new photos are sorted a few seconds after they are added, and hourly
   as a fallback (Android may delay these to save battery).
 
 `npm run build:app` builds the web code against the API in `.env.app` and syncs it into

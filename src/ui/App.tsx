@@ -5,6 +5,7 @@ import { SECTIONS } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
+import { Toaster } from "./PhotoMenu";
 import { ReviewView } from "./ReviewView";
 import { Thumb } from "./Thumb";
 
@@ -116,6 +117,7 @@ export function App() {
         </main>
       </div>
       {dragging && <div className="drop-hint">Drop photos to sort them</div>}
+      <Toaster />
     </div>
   );
 }

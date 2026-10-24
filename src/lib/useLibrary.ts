@@ -45,6 +45,8 @@ export function useLibrary() {
   const running = useRef(new Set<string>());
   const batches = useRef(0);
   const attempts = useRef(new Map<string, number>());
+  // Photos whose request didn't reach the server, by photo id.
+  const networkFails = useRef(new Map<string, number>());
   // When recent photos finished sorting, to estimate the time left.
   const finished = useRef<number[]>([]);
   const [sortRate, setSortRate] = useState<number | null>(null);
@@ -92,12 +94,24 @@ export function useLibrary() {
     })();
   }, []);
 
+  // When the server last answered. A check that fails after a newer answer is stale and is
+  // ignored, so a slow check from before the app was in the background can't knock a working
+  // connection back to "Connecting…".
+  const lastAnswer = useRef(0);
+
+  const serverAnswered = useCallback(() => {
+    lastAnswer.current = Date.now();
+    setServer((s) => (s === "checking" || s === "offline" ? "ok" : s));
+  }, []);
+
   const checkServer = useCallback(async () => {
+    const started = Date.now();
     const s = await serverStatus();
     if (!s.reachable) {
-      setServer("offline");
+      if (lastAnswer.current < started) setServer("offline");
       return;
     }
+    lastAnswer.current = Date.now();
     setServer(s.ai ? "ok" : "no-ai");
     setAiProblem(null);
     setLocked(s.passcodeRequired && !hasPasscode());
@@ -107,11 +121,13 @@ export function useLibrary() {
     checkServer();
   }, [checkServer]);
 
-  // Keep trying while the server is unreachable, and check again when the app comes back.
+  // Keep trying until the server answers. This also covers a first check that never comes
+  // back (iOS can freeze a request when the app goes to the background), which used to leave
+  // "Connecting…" up for good.
   useEffect(() => {
-    if (server !== "offline") return;
-    const timer = setTimeout(checkServer, 10_000);
-    return () => clearTimeout(timer);
+    if (server !== "offline" && server !== "checking") return;
+    const timer = setInterval(checkServer, 10_000);
+    return () => clearInterval(timer);
   }, [server, checkServer]);
 
   useEffect(() => {
@@ -158,6 +174,7 @@ export function useLibrary() {
       });
     }
     if (!ready.length) return;
+    const started = Date.now();
     try {
       const results = await classifyBatch({
         photos: ready.map((photo) => ({
@@ -180,6 +197,7 @@ export function useLibrary() {
       if (failed.length) {
         await markAll(failed.map((p) => p.id), (p) => ({ status: "error", error: (results[ready.indexOf(p)] as { error: string }).error }));
       }
+      serverAnswered();
       recordFinished(ready.length);
     } catch (err) {
       const backToQueue = () => markAll(ready.map((p) => p.id), () => ({ status: "queued", error: undefined }));
@@ -190,9 +208,19 @@ export function useLibrary() {
         return;
       }
       if (err instanceof ApiError && err.status === 0) {
-        // Server unreachable: pause the queue until it answers again.
-        setServer("offline");
-        await backToQueue();
+        // Server unreachable: pause the queue until it answers again. If the server keeps
+        // answering its health check but these photos never get through, stop retrying them
+        // so one stuck photo can't hold the queue (and the banner) forever.
+        // Only counted while the server is answering, so a phone with no signal never gives up.
+        const serverUp = Date.now() - lastAnswer.current < 60_000;
+        const fails = ready.map((p) => (networkFails.current.get(p.id) ?? 0) + (serverUp ? 1 : 0));
+        ready.forEach((p, i) => networkFails.current.set(p.id, fails[i]));
+        if (Math.min(...fails) >= 3) {
+          await markAll(ready.map((p) => p.id), () => ({ status: "error", error: "Couldn't send this photo to the sorting server." }));
+        } else {
+          if (lastAnswer.current < started) setServer("offline");
+          await backToQueue();
+        }
         return;
       }
       if (err instanceof ApiError && err.status === 503) {
@@ -211,7 +239,7 @@ export function useLibrary() {
       );
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
     }
-  }, [commit, markAll, recordFinished]);
+  }, [commit, markAll, recordFinished, serverAnswered]);
 
   // Reading the phone's library also collects what was sorted while the app was closed, so
   // the queue waits for it rather than sorting those photos a second time.
@@ -391,7 +419,10 @@ export function useLibrary() {
   }, [commit]);
 
   const retry = useCallback(async (ids: string[]) => {
-    for (const id of ids) attempts.current.delete(id);
+    for (const id of ids) {
+      attempts.current.delete(id);
+      networkFails.current.delete(id);
+    }
     await markAll(ids, () => ({ status: "queued", error: undefined }));
   }, [markAll]);
 

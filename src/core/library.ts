@@ -50,7 +50,7 @@ export const REVIEW_BELOW = 0.6;
  * the AI isn't confident the photo waits for the person to choose, with the AI's guess kept
  * as a suggestion; no category is created for a guess.
  */
-export function applyClassification(state: LibraryState, photoId: string, result: Classification, newId: () => string): Change {
+export function applyClassification(state: LibraryState, photoId: string, result: Classification, newId: () => string, now: number = Date.now()): Change {
   if (result.confidence < REVIEW_BELOW) {
     const suggestion = isBannedCategoryName(result.category) ? undefined : { section: result.section, category: result.category };
     let updated: Photo | undefined;
@@ -66,7 +66,7 @@ export function applyClassification(state: LibraryState, photoId: string, result
   let updated: Photo | undefined;
   const photos = state.photos.map((p) => {
     if (p.id !== photoId) return p;
-    updated = { ...p, status: "sorted", categoryId: category.id, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
+    updated = { ...p, status: "sorted", categoryId: category.id, filedAt: now, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
     return updated;
   });
   return finish(state, photos, categories, updated ? [updated] : [], created ? [category] : []);
@@ -124,12 +124,32 @@ export function movePhotos(
   const changed: Photo[] = [];
   const photos = state.photos.map((p) => {
     if (!ids.has(p.id)) return p;
-    const next: Photo = { ...p, status: "sorted", categoryId: category.id, suggestion: undefined, error: undefined };
+    const next: Photo = { ...p, status: "sorted", categoryId: category.id, filedAt: undefined, suggestion: undefined, error: undefined };
     changed.push(next);
     return next;
   });
   const categories = created ? [...state.categories, category] : state.categories;
   return finish(state, photos, categories, changed, created ? [category] : []);
+}
+
+/**
+ * Categories with photos the AI filed since the person last opened them, by id. These get
+ * the "new" dot in the menu. Photos the person filed themselves never count as new.
+ */
+export function categoriesWithNew(state: LibraryState): Set<string> {
+  const seenAt = new Map(state.categories.map((c) => [c.id, c.seenAt ?? 0]));
+  const ids = new Set<string>();
+  for (const p of state.photos) {
+    if (p.status === "sorted" && p.categoryId && p.filedAt !== undefined && p.filedAt > (seenAt.get(p.categoryId) ?? Infinity)) ids.add(p.categoryId);
+  }
+  return ids;
+}
+
+/** Records that the person opened a category, which clears its "new" dot. */
+export function markCategorySeen(state: LibraryState, categoryId: string, now: number = Date.now()): Change {
+  let updated: Category | undefined;
+  const categories = state.categories.map((c) => (c.id === categoryId ? (updated = { ...c, seenAt: now }) : c));
+  return { state: { ...state, categories }, putPhotos: [], putCategories: updated ? [updated] : [], deletedCategoryIds: [], deletedPhotoIds: [] };
 }
 
 /** Photos waiting for the person: the AI wasn't sure, or sorting failed. */

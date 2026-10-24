@@ -1,4 +1,4 @@
-import { Capacitor, registerPlugin } from "@capacitor/core";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type { DeviceAsset } from "../core/library";
 import type { DeleteTarget } from "../core/storage";
 
@@ -14,11 +14,17 @@ interface PhotoLibraryPlugin {
   list(options: { offset: number; limit: number }): Promise<{ assets: DeviceAsset[]; total: number; nextOffset: number | null }>;
   getImage(options: { id: string; maxSide: number; quality?: number }): Promise<{ data: string; width: number; height: number }>;
   deleteAssets(options: { ids: string[] }): Promise<{ deleted: boolean }>;
+  /** Fires the moment photos are added to or removed from the library while the app runs. */
+  addListener(event: "libraryChanged", listener: (info: { added?: number }) => void): Promise<PluginListenerHandle>;
   /**
    * Adds photos to an album, creating it if needed. iOS: a Photos album pointing at the
    * originals. Android: copies in Pictures/OrganizeIt/<title> (Android 10+).
    */
   addToAlbum(options: { ids: string[]; title: string }): Promise<{ added: number; title: string; created: boolean }>;
+  /** Copies a photo to the clipboard so it can be pasted into other apps. */
+  copyImage(options: { id: string }): Promise<void>;
+  /** Opens the phone's share sheet for a photo. */
+  shareImage(options: { id: string }): Promise<{ completed: boolean }>;
 }
 
 export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");

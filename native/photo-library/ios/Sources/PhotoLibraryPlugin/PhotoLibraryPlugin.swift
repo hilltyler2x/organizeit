@@ -2,11 +2,12 @@ import Capacitor
 import Foundation
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
-/// Gives OrganizeIt read, delete and album access to the iOS Photos library. Photos are read in
+/// Gives OrganizeIt read, delete, album, copy and share access to the iOS Photos library. Photos are read in
 /// place; nothing is copied out except small JPEG previews requested by the app.
 @objc(PhotoLibraryPlugin)
-public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
+public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChangeObserver {
     public let identifier = "PhotoLibraryPlugin"
     public let jsName = "PhotoLibrary"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -16,8 +17,42 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "list", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getImage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "copyImage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
     ]
+
+    /// All images, kept to tell photos being added or removed apart from other library changes.
+    private var watched: PHFetchResult<PHAsset>?
+
+    override public func load() {
+        watchLibrary()
+    }
+
+    deinit {
+        if watched != nil { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    }
+
+    /// Tells the app (event "libraryChanged") the moment a photo is added to or removed from the
+    /// library while the app is running, so a new photo is sorted right away. Starts once
+    /// access is granted; registering earlier could bring up the permission prompt.
+    private func watchLibrary() {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard watched == nil, status == .authorized || status == .limited else { return }
+        watched = PHAsset.fetchAssets(with: .image, options: nil)
+        PHPhotoLibrary.shared().register(self)
+    }
+
+    public func photoLibraryDidChange(_ changeInstance: PHChange) {
+        DispatchQueue.main.async { // `watched` is only touched on the main queue
+            guard let current = self.watched, let details = changeInstance.changeDetails(for: current) else { return }
+            self.watched = details.fetchResultAfterChanges
+            let inserted = details.insertedObjects.count
+            if inserted > 0 || details.removedObjects.count > 0 {
+                self.notifyListeners("libraryChanged", data: ["added": inserted])
+            }
+        }
+    }
 
     private func statusName(_ status: PHAuthorizationStatus) -> String {
         switch status {
@@ -34,6 +69,7 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func requestPermission(_ call: CAPPluginCall) {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            DispatchQueue.main.async { self.watchLibrary() }
             call.resolve(["status": self.statusName(status)])
         }
     }
@@ -138,6 +174,63 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(["added": assets.count, "title": title, "created": existing == nil])
             } else {
                 call.reject(error?.localizedDescription ?? "Could not add photos to the album")
+            }
+        }
+    }
+
+    /// Loads a photo's full-size image data, downloading it from iCloud if needed.
+    private func originalData(_ call: CAPPluginCall, _ done: @escaping (PHAsset, Data, String?) -> Void) {
+        guard let id = call.getString("id") else { return call.reject("Missing id") }
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else {
+            return call.reject("That photo is no longer on this phone", "NOT_FOUND")
+        }
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.isNetworkAccessAllowed = true
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, uti, _, _ in
+            guard let data = data else { return call.reject("Could not load photo") }
+            done(asset, data, uti)
+        }
+    }
+
+    /// Copies a photo so it can be pasted into Messages, Notes and other apps, like Copy in Photos.
+    @objc func copyImage(_ call: CAPPluginCall) {
+        originalData(call) { _, data, _ in
+            DispatchQueue.main.async {
+                guard let image = UIImage(data: data) else { return call.reject("Could not copy photo") }
+                UIPasteboard.general.image = image
+                call.resolve()
+            }
+        }
+    }
+
+    /// Opens the iOS share sheet for a photo (AirDrop, Messages, Save Image, Copy and the rest).
+    /// Resolves with completed: false if the person closes it without sharing.
+    @objc func shareImage(_ call: CAPPluginCall) {
+        originalData(call) { asset, data, uti in
+            let original = PHAssetResource.assetResources(for: asset).first?.originalFilename
+            let ext = uti.flatMap { UTType($0)?.preferredFilenameExtension } ?? "jpg"
+            let base = (original as NSString?)?.deletingPathExtension ?? "Photo"
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("shared", isDirectory: true)
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let file = dir.appendingPathComponent("\(base).\(ext)")
+            do {
+                try data.write(to: file)
+            } catch {
+                return call.reject("Could not share photo")
+            }
+            DispatchQueue.main.async {
+                guard let host = self.bridge?.viewController else { return call.reject("Could not share photo") }
+                let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+                // iPad shows the sheet as a popover, which needs a place to point at.
+                sheet.popoverPresentationController?.sourceView = host.view
+                sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)
+                sheet.popoverPresentationController?.permittedArrowDirections = []
+                sheet.completionWithItemsHandler = { _, completed, _, _ in
+                    call.resolve(["completed": completed])
+                }
+                host.present(sheet, animated: true)
             }
         }
     }

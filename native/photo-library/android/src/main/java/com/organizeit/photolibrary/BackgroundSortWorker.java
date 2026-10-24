@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  * Runs the background sorter when Android allows:
  * - "keep going": started while the app is open with photos waiting, as a foreground service
  *   with a "Sorting photos" notification, so sorting carries on after the app is closed;
- * - "new photo": runs shortly after a photo is added to the library;
+ * - "new photo": runs a few seconds after a photo is added to the library;
  * - "periodic": about once an hour, as a fallback.
  */
 public class BackgroundSortWorker extends Worker {
@@ -67,7 +67,8 @@ public class BackgroundSortWorker extends Worker {
     private static void watchForNewPhotos(Context context, ExistingWorkPolicy policy) {
         Constraints constraints = online()
             .addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
-            .setTriggerContentUpdateDelay(30, TimeUnit.SECONDS)
+            .setTriggerContentUpdateDelay(3, TimeUnit.SECONDS)
+            .setTriggerContentMaxDelay(15, TimeUnit.SECONDS)
             .build();
         WorkManager.getInstance(context).enqueueUniqueWork("organizeit-new-photo", policy, once(NEW_PHOTO).setConstraints(constraints).build());
     }

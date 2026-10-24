@@ -16,6 +16,8 @@ export interface Category {
   /** Seeded categories stay even when empty; AI-created ones are removed once empty. */
   seeded: boolean;
   createdAt: number;
+  /** When the person last opened this category. Photos the AI files after this are "new". */
+  seenAt?: number;
 }
 
 /**
@@ -37,6 +39,8 @@ export interface Photo {
   status: PhotoStatus;
   /** Set once status is "sorted". A sorted photo always has a real category. */
   categoryId?: string;
+  /** When the AI filed this photo into its category. Not set when the person filed it. */
+  filedAt?: number;
   /** Short description of what is in the photo, from the classifier. */
   label?: string;
   confidence?: number;

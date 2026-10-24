@@ -3,15 +3,26 @@ import { z } from "zod";
 import { isBannedCategoryName, pickCategoryName } from "../src/core/categories";
 import type { Classification, Section } from "../src/core/types";
 
-export const MODEL = "claude-opus-5-5";
+// The model can be switched on the server (CLASSIFY_MODEL) without a new app build.
+export const MODEL = process.env.CLASSIFY_MODEL || "claude-opus-5-5";
+// Haiku has no server-side refusal fallback; the other current models do.
+const FALLBACKS = !MODEL.startsWith("claude-haiku");
 
-export const ClassifyRequest = z.object({
+// Up to this many photos go to the AI in one request. One request per photo spends most of
+// its time on per-request overhead, so batches sort several times faster.
+export const MAX_BATCH = 8;
+
+const PhotoInput = z.object({
   image: z.string().min(1), // base64, no data: prefix
   mediaType: z.enum(["image/jpeg", "image/png", "image/webp", "image/gif"]),
   fileName: z.string().max(300).default(""),
   width: z.number().int().nonnegative().default(0),
   height: z.number().int().nonnegative().default(0),
   isScreenshot: z.boolean().default(false),
+});
+type PhotoInput = z.infer<typeof PhotoInput>;
+
+const Context = z.object({
   categories: z
     .array(z.object({ section: z.enum(["business", "products", "personal"]), name: z.string().max(80) }))
     .max(500),
@@ -28,7 +39,12 @@ export const ClassifyRequest = z.object({
     .max(100)
     .default([]),
 });
+
+export const ClassifyRequest = PhotoInput.extend(Context.shape);
 export type ClassifyRequest = z.infer<typeof ClassifyRequest>;
+
+export const ClassifyBatchRequest = Context.extend({ photos: z.array(PhotoInput).min(1).max(MAX_BATCH) });
+export type ClassifyBatchRequest = z.infer<typeof ClassifyBatchRequest>;
 
 const ModelAnswer = z.object({
   section: z.enum(["business", "products", "personal"]),
@@ -46,6 +62,23 @@ const OUTPUT_SCHEMA = {
     category: { type: "string", description: "Existing category name, or a new specific plural name" },
     label: { type: "string", description: "Short description of the main item or document, e.g. 'Nike Dunk Low sneaker'" },
     confidence: { type: "number", description: "0 to 1" },
+  },
+} as const;
+
+const BATCH_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["photos"],
+  properties: {
+    photos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["photo", ...OUTPUT_SCHEMA.required],
+        properties: { photo: { type: "integer", description: "The photo's number" }, ...OUTPUT_SCHEMA.properties },
+      },
+    },
   },
 } as const;
 
@@ -83,7 +116,7 @@ function lessonList(lessons: ClassifyRequest["lessons"]): string {
   return `Corrections this person made to earlier photos:\n${lines.join("\n")}\n\n`;
 }
 
-function hints(req: ClassifyRequest): string {
+function hints(req: PhotoInput): string {
   const parts: string[] = [];
   if (req.fileName) parts.push(`File name: ${req.fileName}`);
   if (req.width && req.height) parts.push(`Original size: ${req.width}x${req.height}`);
@@ -99,22 +132,41 @@ export class ClassifyError extends Error {
 
 type Messages = Anthropic.Beta.Messages.BetaMessageParam[];
 
-async function ask(client: Anthropic, messages: Messages): Promise<{ answer: z.infer<typeof ModelAnswer>; raw: Anthropic.Beta.Messages.BetaMessage }> {
+async function request(client: Anthropic, messages: Messages, schema: { [key: string]: unknown }, maxTokens: number) {
   const response = await client.beta.messages.create({
     model: MODEL,
-    max_tokens: 4000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    max_tokens: maxTokens,
+    ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     system: SYSTEM,
-    output_config: { effort: "low", format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
+    output_config: { effort: "low", format: { type: "json_schema", schema } },
     messages,
   });
   if (response.stop_reason === "refusal") throw new ClassifyError("The AI declined to classify this photo.", 422);
   const text = response.content.find((b) => b.type === "text");
   if (!text || text.type !== "text") throw new ClassifyError("The AI returned no answer.", 502);
-  const parsed = ModelAnswer.safeParse(JSON.parse(text.text));
+  let json: unknown;
+  try {
+    json = JSON.parse(text.text);
+  } catch {
+    throw new ClassifyError("The AI returned an answer in the wrong shape.", 502);
+  }
+  return { json, raw: response };
+}
+
+async function ask(client: Anthropic, messages: Messages): Promise<{ answer: z.infer<typeof ModelAnswer>; raw: Anthropic.Beta.Messages.BetaMessage }> {
+  const { json, raw } = await request(client, messages, OUTPUT_SCHEMA, 4000);
+  const parsed = ModelAnswer.safeParse(json);
   if (!parsed.success) throw new ClassifyError("The AI returned an answer in the wrong shape.", 502);
-  return { answer: parsed.data, raw: response };
+  return { answer: parsed.data, raw };
+}
+
+function toClassification(answer: z.infer<typeof ModelAnswer>, category: string): Classification {
+  return {
+    section: answer.section,
+    category,
+    label: answer.label.slice(0, 120),
+    confidence: Math.max(0, Math.min(1, answer.confidence)),
+  };
 }
 
 export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Promise<Classification> {
@@ -145,11 +197,56 @@ export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Pr
     name = pickCategoryName(answer.category, answer.label);
   }
   if (!name) throw new ClassifyError("Could not find a specific category for this photo.", 422);
+  return toClassification(answer, name);
+}
 
-  return {
-    section: answer.section,
-    category: name,
-    label: answer.label.slice(0, 120),
-    confidence: Math.max(0, Math.min(1, answer.confidence)),
-  };
+export type BatchResult = Classification | { error: string };
+
+/**
+ * Classifies several photos in one AI request. The answers come back in the same order. A
+ * photo the batch answer misses, or files under a catch-all, gets its own request (with the
+ * usual corrective retry), so the no-catch-all rule holds exactly as for a single photo.
+ */
+export async function classifyBatch(client: Anthropic, req: ClassifyBatchRequest): Promise<BatchResult[]> {
+  const single = (photo: PhotoInput) =>
+    classifyPhoto(client, { ...photo, categories: req.categories, lessons: req.lessons }).catch((err): BatchResult => {
+      if (err instanceof ClassifyError) return { error: err.message };
+      throw err;
+    });
+  if (req.photos.length === 1) return [await single(req.photos[0])];
+
+  const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [
+    {
+      type: "text",
+      text: `Existing categories by section:\n${categoryList(req.categories)}\n\n${lessonList(req.lessons)}Classify each of the ${req.photos.length} photos below on its own. Answer with one entry per photo, using its number.`,
+    },
+  ];
+  req.photos.forEach((photo, i) => {
+    const extra = hints(photo);
+    content.push({ type: "text", text: `Photo ${i + 1}${extra ? `\n${extra}` : ""}` });
+    content.push({ type: "image", source: { type: "base64", media_type: photo.mediaType, data: photo.image } });
+  });
+
+  const answers = new Map<number, z.infer<typeof ModelAnswer>>();
+  try {
+    const { json } = await request(client, [{ role: "user", content }], BATCH_SCHEMA, 2000 + 400 * req.photos.length);
+    const items = (json as { photos?: unknown })?.photos;
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const parsed = ModelAnswer.extend({ photo: z.number().int() }).safeParse(item);
+        if (parsed.success) answers.set(parsed.data.photo, parsed.data);
+      }
+    }
+  } catch (err) {
+    // A refusal or a garbled batch answer: sort each photo on its own instead.
+    if (!(err instanceof ClassifyError)) throw err;
+  }
+
+  return Promise.all(
+    req.photos.map(async (photo, i) => {
+      const answer = answers.get(i + 1);
+      const name = answer && pickCategoryName(answer.category, answer.label);
+      return answer && name ? toClassification(answer, name) : single(photo);
+    }),
+  );
 }

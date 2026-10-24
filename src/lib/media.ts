@@ -7,6 +7,8 @@ import { PhotoLibrary, base64ToBlob } from "./photoLibrary";
 // through the native plugin (only a small thumbnail is cached); photos added from files
 // keep their original in IndexedDB.
 
+const CLASSIFIER_SIDE = 768;
+
 export async function thumbnail(photo: Photo): Promise<Blob | undefined> {
   const cached = await store.getBlobs(photo.id);
   if (cached?.thumb) return cached.thumb;
@@ -25,15 +27,18 @@ export async function fullImage(photo: Photo): Promise<Blob | undefined> {
   return (await store.getBlobs(photo.id))?.original;
 }
 
-/** A ~1024px JPEG, base64-encoded, for the classifier. */
+/**
+ * A ~768px JPEG, base64-encoded, for the classifier. That is plenty to tell a receipt from a
+ * sneaker, and about half the upload and AI reading time of 1024px.
+ */
 export async function classifierImage(photo: Photo): Promise<string> {
   if (photo.source.kind === "native") {
-    return (await PhotoLibrary.getImage({ id: photo.source.assetId, maxSide: 1024, quality: 0.8 })).data;
+    return (await PhotoLibrary.getImage({ id: photo.source.assetId, maxSide: CLASSIFIER_SIDE, quality: 0.8 })).data;
   }
   const original = (await store.getBlobs(photo.id))?.original;
   if (!original) throw new Error("Photo data is missing.");
   const { bitmap } = await decode(original);
-  const small = await resize(bitmap, 1024, 0.8);
+  const small = await resize(bitmap, CLASSIFIER_SIDE, 0.8);
   bitmap.close();
   return blobToBase64(small);
 }

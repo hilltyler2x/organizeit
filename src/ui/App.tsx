@@ -246,9 +246,18 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
         </p>
       )}
       {pending.length > 0 && (
-        <div className="queue-row">
+        <div className="queue-row sorting">
           <span className={lib.server === "ok" && !lib.locked ? "spinner" : ""} aria-hidden />
-          <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
+          <span>
+            <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
+            {lib.sortRate && <span className="muted small"> {timeLeft(pending.length / lib.sortRate)}</span>}
+          </span>
+          {lib.sortedThisRun > 0 && (
+            <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={Math.round((100 * lib.sortedThisRun) / (lib.sortedThisRun + pending.length))}>
+              <span style={{ width: `${(100 * lib.sortedThisRun) / (lib.sortedThisRun + pending.length)}%` }} />
+            </div>
+          )}
         </div>
       )}
       {waiting.length > 0 && (
@@ -272,6 +281,14 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
       )}
     </div>
   );
+}
+
+function timeLeft(seconds: number): string {
+  if (seconds < 60) return "Less than a minute left";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `About ${minutes} minute${minutes === 1 ? "" : "s"} left`;
+  const hours = Math.round(minutes / 6) / 10;
+  return `About ${hours} hour${hours === 1 ? "" : "s"} left`;
 }
 
 function PasscodeForm({ lib }: { lib: Library }) {

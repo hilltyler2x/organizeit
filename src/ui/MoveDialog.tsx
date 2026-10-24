@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
+import { BackLayer, useBack } from "./back";
 import { Thumb } from "./Thumb";
 
 export type MoveTarget = { categoryId: string } | { section: Section; name: string };
@@ -20,6 +21,7 @@ export function MoveDialog(props: {
   onDelete?: () => void;
   onClose: () => void;
 }) {
+  useBack(true, props.onClose, BackLayer.dialog);
   const [section, setSection] = useState<Section>(props.defaultSection);
   const [name, setName] = useState("");
   const trimmed = name.trim();

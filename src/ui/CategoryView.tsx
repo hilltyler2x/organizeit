@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isBannedCategoryName } from "../core/categories";
 import { formatBytes } from "../core/storage";
 import { SECTIONS, type Category, type Photo } from "../core/types";
+import { albumsCopyPhotos } from "../lib/photoLibrary";
 import type { Library } from "../lib/useLibrary";
 import { AlbumDialog } from "./AlbumDialog";
+import { BackLayer, useBack } from "./back";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoViewer } from "./PhotoViewer";
 import { useLongPress, useScrolledPast } from "./selection";
@@ -29,6 +31,12 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
     setSelecting(true);
     setSelected((s) => new Set(s).add(id));
   });
+
+  useBack(selecting, () => {
+    setSelecting(false);
+    setSelected(new Set());
+  }, BackLayer.select);
+  useBack(renaming, () => setRenaming(false), BackLayer.dialog);
 
   useEffect(() => {
     setSelected(new Set());
@@ -203,7 +211,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
               setAlbuming(false);
               setSelected(new Set());
               setSelecting(false);
-              setNotice(`Added ${added} photo${added === 1 ? "" : "s"} to ${created ? "new album " : ""}"${title}" in Photos.`);
+              setNotice(`Added ${added} photo${added === 1 ? "" : "s"} to ${created ? "new album " : ""}"${title}"${albumsCopyPhotos ? "" : " in Photos"}.`);
             })
           }
         />

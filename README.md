@@ -92,6 +92,12 @@ native plugin in `native/photo-library` (iOS PhotoKit, Android MediaStore). The 
 - keeps sorting after it is closed, as far as the phone allows (see below),
 - deletes for real: bulk delete removes photos from the phone after the system's own
   confirmation, and photos deleted elsewhere drop out of OrganizeIt.
+- puts selected photos in an album for picking in other apps such as Big Cartel: on iPhone a
+  Photos album that points at the originals; on Android (10+) copies in
+  `Pictures/OrganizeIt/<album>`, since Android albums are folders. OrganizeIt skips its own
+  album copies when it reads the library,
+- on Android, the Back button closes the open photo, dialog, Select mode, menu or category
+  before leaving the app (`src/ui/back.ts`, `MainActivity.java`).
 
 ### Sorting while the app is closed
 
@@ -113,8 +119,8 @@ was unsure about still go to To review and the core rule still holds.
   photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
   an app that was swiped away in the app switcher until it is opened again. Background App
   Refresh must be on for OrganizeIt in Settings.
-- **Android:** a "Sorting photos" notification (a foreground service) keeps sorting after
-  the app is closed; new photos are sorted about 30 seconds after they are added, and hourly
+- **Android:** a "Sorting photos" notification (a foreground service; Android 13+ asks to
+  allow notifications along with Photos) keeps sorting after the app is closed; new photos are sorted about 30 seconds after they are added, and hourly
   as a fallback (Android may delay these to save battery).
 
 `npm run build:app` builds the web code against the API in `.env.app` and syncs it into

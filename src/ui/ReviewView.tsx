@@ -64,14 +64,16 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     setSelecting(false);
   };
 
-  const deleteSelected = () => {
-    const ids = chosen.map((p) => p.id);
-    const bytes = chosen.reduce((n, p) => n + p.bytes, 0);
+  const deletePhotos = (list: Photo[]) => {
+    const ids = list.map((p) => p.id);
+    const bytes = list.reduce((n, p) => n + p.bytes, 0);
+    // In the app the phone shows its own delete confirmation.
     if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(bytes)}) from OrganizeIt?`)) return;
     run(async () => {
       const deleted = await lib.remove(ids);
       if (!deleted) return;
       forgetImages(ids);
+      setMoving(null);
       clearSelection();
       setNotice(deleted);
     });
@@ -105,8 +107,8 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
           <p className="eyebrow">To review</p>
           <h1>Help sort {photos.length} photo{photos.length === 1 ? "" : "s"}</h1>
           <p className="muted">
-            OrganizeIt wasn't sure where these go. Tap a photo to choose its category, or tap Select to send several to the
-            same place. Each answer teaches OrganizeIt{lib.lessonCount ? ` (it has learned from ${lib.lessonCount} so far)` : ""}.
+            OrganizeIt wasn't sure where these go. Tap a photo to choose its category or delete it, or tap Select to send
+            several to the same place or delete them together. Each answer teaches OrganizeIt{lib.lessonCount ? ` (it has learned from ${lib.lessonCount} so far)` : ""}.
           </p>
         </div>
         <button onClick={() => (selecting ? clearSelection() : setSelecting(true))}>{selecting ? "Done" : "Select"}</button>
@@ -164,7 +166,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
             <button onClick={() => run(async () => { await lib.retry(failed.map((p) => p.id)); setSelected(new Set()); })}>Retry</button>
           )}
           <button className="primary" disabled={!selected.size} onClick={() => setMoving(chosen)}>Move</button>
-          <button className="danger" disabled={!selected.size} onClick={deleteSelected}>Delete</button>
+          <button className="danger" disabled={!selected.size} onClick={() => deletePhotos(chosen)}>Delete</button>
         </div>
       )}
 
@@ -177,6 +179,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
           suggestion={sharedGuess(moving)}
           defaultSection={sharedGuess(moving)?.section ?? moving[0]?.suggestion?.section ?? "products"}
           onClose={() => setMoving(null)}
+          onDelete={() => deletePhotos(moving)}
           onMove={(target) =>
             run(async () => {
               await lib.move(moving.map((p) => p.id), target);

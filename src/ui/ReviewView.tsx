@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { categoryMatchKey, tidyCategoryName } from "../core/categories";
 import { needsPerson } from "../core/library";
 import { formatBytes } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
+import { useLongPress, useScrolledPast } from "./selection";
 import { Thumb, forgetImages } from "./Thumb";
 
 // Photos the AI wasn't sure about (or couldn't sort). This is a to-do list, not a category:
@@ -18,6 +19,12 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
   const [moving, setMoving] = useState<Photo[] | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const header = useRef<HTMLElement>(null);
+  const headerGone = useScrolledPast(header);
+  const press = useLongPress((id) => {
+    setSelecting(true);
+    setSelected((s) => new Set(s).add(id));
+  });
 
   // Drop selections for photos that have left the list.
   useEffect(() => {
@@ -102,7 +109,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
 
   return (
     <section className="review-view">
-      <header className="category-header">
+      <header className="category-header" ref={header}>
         <div>
           <p className="eyebrow">To review</p>
           <h1>Help sort {photos.length} photo{photos.length === 1 ? "" : "s"}</h1>
@@ -143,7 +150,11 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
               aria-pressed={selecting ? selected.has(p.id) : undefined}
               aria-label={p.label ?? p.fileName}
               title={p.error}
-              onClick={() => (selecting ? toggle(p.id) : setMoving([p]))}
+              {...press.handlers(p.id)}
+              onClick={() => {
+                if (press.consumed()) return;
+                selecting ? toggle(p.id) : setMoving([p]);
+              }}
             >
               <Thumb photo={p} alt={p.label ?? p.fileName} />
               {selecting && <span className="check" aria-hidden>{selected.has(p.id) ? "✓" : ""}</span>}
@@ -167,7 +178,12 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
           )}
           <button className="primary" disabled={!selected.size} onClick={() => setMoving(chosen)}>Move</button>
           <button className="danger" disabled={!selected.size} onClick={() => deletePhotos(chosen)}>Delete</button>
+          <button onClick={clearSelection}>Done</button>
         </div>
+      )}
+
+      {!selecting && headerGone && (
+        <button className="floating-select" onClick={() => setSelecting(true)}>Select</button>
       )}
 
       {moving && (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isBannedCategoryName } from "../core/categories";
 import { formatBytes } from "../core/storage";
 import { SECTIONS, type Category, type Photo } from "../core/types";
@@ -6,6 +6,7 @@ import type { Library } from "../lib/useLibrary";
 import { AlbumDialog } from "./AlbumDialog";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoViewer } from "./PhotoViewer";
+import { useLongPress, useScrolledPast } from "./selection";
 import { Thumb, forgetImages } from "./Thumb";
 
 export function CategoryView({ lib, category, onGone }: { lib: Library; category: Category; onGone: () => void }) {
@@ -22,6 +23,12 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(category.name);
   const [error, setError] = useState("");
+  const header = useRef<HTMLElement>(null);
+  const headerGone = useScrolledPast(header);
+  const press = useLongPress((id) => {
+    setSelecting(true);
+    setSelected((s) => new Set(s).add(id));
+  });
 
   useEffect(() => {
     setSelected(new Set());
@@ -72,7 +79,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
 
   return (
     <section className="category-view">
-      <header className="category-header">
+      <header className="category-header" ref={header}>
         <div>
           <p className="eyebrow">{section.label}</p>
           {renaming ? (
@@ -128,7 +135,11 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
                 className="tile"
                 aria-pressed={selecting ? selected.has(p.id) : undefined}
                 aria-label={p.label ?? p.fileName}
-                onClick={() => (selecting ? toggle(p.id) : setViewing(p))}
+                {...press.handlers(p.id)}
+                onClick={() => {
+                  if (press.consumed()) return;
+                  selecting ? toggle(p.id) : setViewing(p);
+                }}
               >
                 <Thumb photo={p} alt={p.label ?? p.fileName} />
                 {selecting && <span className="check" aria-hidden>{selected.has(p.id) ? "✓" : ""}</span>}
@@ -153,7 +164,12 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
           )}
           <button disabled={!selected.size} onClick={() => setMoving(true)}>Move</button>
           <button className="danger" disabled={!selected.size} onClick={deleteSelected}>Delete</button>
+          <button onClick={() => { setSelecting(false); setSelected(new Set()); }}>Done</button>
         </div>
+      )}
+
+      {!selecting && headerGone && photos.length > 0 && (
+        <button className="floating-select" onClick={() => setSelecting(true)}>Select</button>
       )}
 
       {moving && (

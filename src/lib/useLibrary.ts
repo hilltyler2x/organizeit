@@ -17,7 +17,7 @@ import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
-import { PhotoLibrary, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
+import { PhotoLibrary, canMakeAlbums, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
 import type { PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
@@ -269,6 +269,16 @@ export function useLibrary() {
     return true;
   }, [commit]);
 
+  /** Puts photos from the phone's library into a Photos album (iPhone app only). */
+  const addToAlbum = useCallback(async (ids: string[], title: string) => {
+    const idSet = new Set(ids);
+    const assetIds = stateRef.current.photos
+      .filter((p) => idSet.has(p.id) && p.source.kind === "native")
+      .map((p) => (p.source as { assetId: string }).assetId);
+    if (!assetIds.length) throw new Error("Only photos from your phone's library can go into an album.");
+    return PhotoLibrary.addToAlbum({ ids: assetIds, title });
+  }, []);
+
   const importPhotos = useCallback(async (picked: PickedPhoto[]) => {
     for (const item of picked) {
       try {
@@ -326,6 +336,7 @@ export function useLibrary() {
     aiProblem,
     locked,
     native: isNativeApp,
+    canMakeAlbums,
     permission,
     scan,
     background,
@@ -341,6 +352,7 @@ export function useLibrary() {
     move,
     lessonCount,
     remove,
+    addToAlbum,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };
 }

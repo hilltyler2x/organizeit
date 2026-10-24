@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import {
   applyClassifications,
+  markCategorySeen,
   movePhotos,
   removePhotos,
   renameCategory,
@@ -369,6 +370,11 @@ export function useLibrary() {
     return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target);
   }, [commit]);
 
+  /** Clears a category's "new" dot once the person has opened it. */
+  const markSeen = useCallback(async (categoryId: string) => {
+    await commit(markCategorySeen(stateRef.current, categoryId));
+  }, [commit]);
+
   /** Puts photos from the phone's library into a Photos album (iPhone app only). */
   const addToAlbum = useCallback(async (ids: string[], title: string) => {
     const idSet = new Set(ids);
@@ -457,6 +463,7 @@ export function useLibrary() {
     lessonCount,
     remove,
     addToAlbum,
+    markSeen,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };
 }

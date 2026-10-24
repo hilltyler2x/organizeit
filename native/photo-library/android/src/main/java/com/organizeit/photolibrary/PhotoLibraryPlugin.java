@@ -5,10 +5,13 @@ import android.app.Activity;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
 import android.content.Intent;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
@@ -52,9 +55,24 @@ public class PhotoLibraryPlugin extends Plugin {
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
     private ActivityResultLauncher<IntentSenderRequest> deleteLauncher;
     private PluginCall pendingDelete;
+    private ContentObserver libraryObserver;
+
+    @Override
+    protected void handleOnDestroy() {
+        if (libraryObserver != null) getContext().getContentResolver().unregisterContentObserver(libraryObserver);
+    }
 
     @Override
     public void load() {
+        // Tell the app the moment a photo is added or removed while it is running, so a new
+        // photo is sorted right away (event "libraryChanged").
+        libraryObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                notifyListeners("libraryChanged", new JSObject());
+            }
+        };
+        getContext().getContentResolver().registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, libraryObserver);
         deleteLauncher = getActivity()
             .registerForActivityResult(new ActivityResultContracts.StartIntentSenderForResult(), (result) -> {
                 if (pendingDelete == null) return;

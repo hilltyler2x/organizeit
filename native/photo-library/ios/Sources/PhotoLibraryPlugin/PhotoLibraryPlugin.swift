@@ -6,7 +6,7 @@ import UIKit
 /// Gives OrganizeIt read, delete and album access to the iOS Photos library. Photos are read in
 /// place; nothing is copied out except small JPEG previews requested by the app.
 @objc(PhotoLibraryPlugin)
-public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
+public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChangeObserver {
     public let identifier = "PhotoLibraryPlugin"
     public let jsName = "PhotoLibrary"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -18,6 +18,38 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise)
     ]
+
+    /// All images, kept to tell photos being added or removed apart from other library changes.
+    private var watched: PHFetchResult<PHAsset>?
+
+    override public func load() {
+        watchLibrary()
+    }
+
+    deinit {
+        if watched != nil { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    }
+
+    /// Tells the app (event "libraryChanged") the moment a photo is added to or removed from the
+    /// library while the app is running, so a new photo is sorted right away. Starts once
+    /// access is granted; registering earlier could bring up the permission prompt.
+    private func watchLibrary() {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard watched == nil, status == .authorized || status == .limited else { return }
+        watched = PHAsset.fetchAssets(with: .image, options: nil)
+        PHPhotoLibrary.shared().register(self)
+    }
+
+    public func photoLibraryDidChange(_ changeInstance: PHChange) {
+        DispatchQueue.main.async { // `watched` is only touched on the main queue
+            guard let current = self.watched, let details = changeInstance.changeDetails(for: current) else { return }
+            self.watched = details.fetchResultAfterChanges
+            let inserted = details.insertedObjects.count
+            if inserted > 0 || details.removedObjects.count > 0 {
+                self.notifyListeners("libraryChanged", data: ["added": inserted])
+            }
+        }
+    }
 
     private func statusName(_ status: PHAuthorizationStatus) -> String {
         switch status {
@@ -34,6 +66,7 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func requestPermission(_ call: CAPPluginCall) {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+            DispatchQueue.main.async { self.watchLibrary() }
             call.resolve(["status": self.statusName(status)])
         }
     }

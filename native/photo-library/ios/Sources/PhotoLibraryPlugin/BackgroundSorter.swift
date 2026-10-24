@@ -185,6 +185,8 @@ public final class BackgroundSorter {
     private var active = true
     private var continuedTask: AnyObject?
     private var continuedTotal: Int64 = 0
+    /// When starting the continued task last failed; not retried for a minute after.
+    private var continuedFailedAt: Date?
     /// How many photos the last run sorted, for the log.
     private var lastRunSorted = 0
 
@@ -217,14 +219,8 @@ public final class BackgroundSorter {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: processingId, using: nil) { [weak self] task in
             self?.runScheduled(task)
         }
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: "\(continuedPrefix).*", using: nil) { [weak self] task in
-                guard let task = task as? BGContinuedProcessingTask else { return task.setTaskCompleted(success: false) }
-                self?.runContinued(task)
-            }
-        }
-        #endif
+        // The iOS 26 continued task is registered under its own identifier right before it is
+        // submitted (queueChanged): iOS refuses a handler registered for the wildcard itself.
         let center = NotificationCenter.default
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.setAppActive(true)
@@ -264,10 +260,21 @@ public final class BackgroundSorter {
                 return
             }
             guard waiting > 0, !alreadyStarted, isAppActive else { return }
-            let request = BGContinuedProcessingTaskRequest(
-                identifier: "\(continuedPrefix).\(UUID().uuidString)",
-                title: "Sorting photos",
-                subtitle: "\(waiting) to go")
+            if let failed = continuedFailedAt, Date().timeIntervalSince(failed) < 60 { return }
+            // Info.plist permits "<bundle id>.continue.*"; each request gets a fresh identifier with
+            // its own handler, since a handler can't be registered for the wildcard and an
+            // identifier can only be registered once.
+            let identifier = "\(continuedPrefix).\(UUID().uuidString)"
+            let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { [weak self] task in
+                guard let task = task as? BGContinuedProcessingTask else { return task.setTaskCompleted(success: false) }
+                self?.runContinued(task)
+            }
+            guard registered else {
+                continuedFailedAt = Date()
+                BackgroundSortLog.note("iOS wouldn't let OrganizeIt sort in the background (task not permitted).")
+                return
+            }
+            let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Sorting photos", subtitle: "\(waiting) to go")
             request.strategy = .fail // start now or not at all, so a stale request never blocks the next
             // Marked before submitting: iOS may start the task (and set the real one) right away.
             lock.lock()
@@ -278,6 +285,7 @@ public final class BackgroundSorter {
             } catch {
                 lock.lock()
                 if continuedTask is NSNull { continuedTask = nil }
+                continuedFailedAt = Date()
                 lock.unlock()
                 BackgroundSortLog.note("iOS wouldn't start sorting in the background (\(error.localizedDescription)).")
             }
@@ -588,6 +596,10 @@ public final class BackgroundSorter {
         BackgroundSortLog.note("Sorting will carry on after you close the app.")
         let work = Task {
             var success = true
+            // Once everything is sorted with the app closed, keep watching a few minutes for
+            // photos taken in the meantime, so they're sorted without waiting for the next
+            // time iOS wakes the app.
+            var watchUntil: Date?
             while !Task.isCancelled {
                 if self.isAppActive {
                     let waiting = self.store.load().config?.queued.count ?? 0
@@ -599,7 +611,16 @@ public final class BackgroundSorter {
                 let outcome = await self.run(shouldStop: { Task.isCancelled || self.isAppActive }) { waiting in
                     self.report(task, waiting: waiting)
                 }
-                if outcome == .finished { self.noteRun("All caught up."); break }
+                if outcome == .finished {
+                    if self.isAppActive { continue }
+                    let until = watchUntil ?? Date(timeIntervalSinceNow: 5 * 60)
+                    watchUntil = until
+                    if Date() >= until { self.noteRun("All caught up."); break }
+                    if self.lastRunSorted > 0 { watchUntil = Date(timeIntervalSinceNow: 5 * 60) } // new photos came in
+                    task.updateTitle("Sorting photos", subtitle: "All sorted · watching for new photos")
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    continue
+                }
                 if outcome == .blocked { success = false; break }
                 if outcome == .busy { try? await Task.sleep(nanoseconds: 2_000_000_000) }
             }

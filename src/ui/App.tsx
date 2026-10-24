@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { needsPerson } from "../core/library";
+import { categoriesWithNew, needsPerson } from "../core/library";
 import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
@@ -20,11 +20,19 @@ export function App() {
   const usage = useMemo(() => usageByCategory(lib.categories, lib.photos), [lib.categories, lib.photos]);
   const category = view.kind === "category" ? lib.categories.find((c) => c.id === view.id) : undefined;
   const toReview = useMemo(() => needsPerson(lib.photos).length, [lib.photos]);
+  const withNew = useMemo(() => categoriesWithNew({ photos: lib.photos, categories: lib.categories }), [lib.photos, lib.categories]);
 
   // A category the AI created disappears once emptied; fall back to the overview.
   useEffect(() => {
     if (view.kind === "category" && lib.ready && !category) setView({ kind: "overview" });
   }, [view, category, lib.ready]);
+
+  // Opening a category clears its dot. It stays clear while open, and comes back only when
+  // the AI files something new there after the person has left it.
+  const markSeen = lib.markSeen;
+  useEffect(() => {
+    if (category && withNew.has(category.id)) markSeen(category.id);
+  }, [category, withNew, markSeen]);
 
   const add = async (folder = false) => lib.importPhotos(await browserPhotoSource({ folder }).pick());
   const open = (v: View) => {
@@ -84,7 +92,7 @@ export function App() {
                     className={`nav-item ${category?.id === u.category.id ? "active" : ""} ${u.count === 0 ? "dim" : ""}`}
                     onClick={() => open({ kind: "category", id: u.category.id })}
                   >
-                    <span>{u.category.name}{!u.category.seeded && <span className="new-dot" title="Created by OrganizeIt" />}</span>
+                    <span>{u.category.name}{withNew.has(u.category.id) && <span className="new-dot" title="New photos" />}</span>
                     <span className="count">{u.count || ""}</span>
                   </button>
                 ))}

@@ -13,11 +13,16 @@ interface PhotoLibraryPlugin {
   list(options: { offset: number; limit: number }): Promise<{ assets: DeviceAsset[]; total: number; nextOffset: number | null }>;
   getImage(options: { id: string; maxSide: number; quality?: number }): Promise<{ data: string; width: number; height: number }>;
   deleteAssets(options: { ids: string[] }): Promise<{ deleted: boolean }>;
+  /** iOS only. Adds photos to a Photos album, creating it if needed. */
+  addToAlbum(options: { ids: string[]; title: string }): Promise<{ added: number; title: string; created: boolean }>;
 }
 
 export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");
 
 export const isNativeApp = Capacitor.isNativePlatform();
+
+/** Whether photos can be put into a Photos album (the iPhone app only, for now). */
+export const canMakeAlbums = Capacitor.getPlatform() === "ios";
 
 /** Reads the metadata of every photo on the device, in pages. */
 export async function listAllAssets(onProgress?: (done: number, total: number) => void): Promise<DeviceAsset[]> {

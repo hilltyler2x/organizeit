@@ -9,7 +9,8 @@ public class BackgroundSortPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "BackgroundSort"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "configure", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "takeResults", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "takeResults", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise)
     ]
 
     private let sorter = BackgroundSorter.shared
@@ -39,5 +40,11 @@ public class BackgroundSortPlugin: CAPPlugin, CAPBridgedPlugin {
             ]
         }
         call.resolve(["results": results])
+    }
+
+    @objc func status(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(self.sorter.status())
+        }
     }
 }

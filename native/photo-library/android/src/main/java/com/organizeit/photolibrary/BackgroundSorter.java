@@ -17,8 +17,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,7 +41,7 @@ final class BackgroundSorter {
         FINISHED,
         /** Asked to stop (time is up, or the app came back). */
         STOPPED,
-        /** Can't sort right now: no access, no server, wrong passcode, or the AI is busy. */
+        /** Can't sort right now: no photo access, wrong passcode, no AI key, or the server stayed unreachable. */
         BLOCKED,
         /** Another run is already sorting. */
         BUSY
@@ -96,20 +98,47 @@ final class BackgroundSorter {
 
     private enum Answer {
         SORTED,
+        /** This photo can't be sorted here; left for the app, which retries and shows errors. */
         SKIP,
-        BLOCKED
+        /** The server or AI is busy or had a hiccup: try this photo again shortly. */
+        RETRY,
+        /** No connection, or the server is asleep. */
+        OFFLINE,
+        /** Wrong passcode or no AI key: retrying won't help. */
+        PERMANENT
     }
 
-    /** Sorts waiting photos, a few at a time, until none are left or stop says so. */
+    /** Remembers what background sorting last did, so the app can show it. */
+    static void note(Context context, String message) {
+        context
+            .getSharedPreferences("organizeit-background", Context.MODE_PRIVATE)
+            .edit()
+            .putString("last", message)
+            .putLong("lastAt", System.currentTimeMillis())
+            .apply();
+    }
+
+    /**
+     * Sorts waiting photos, a few at a time, until none are left or stop says so. A dropped
+     * connection, a sleeping server or a busy AI is waited out with growing pauses rather than
+     * ending the run.
+     */
     Outcome run(StopCheck stop, Progress progress) {
         if (!running.compareAndSet(false, true)) return Outcome.BUSY;
         ExecutorService pool = Executors.newFixedThreadPool(BATCH);
+        int sorted = 0;
         try {
-            if (!hasPhotoAccess(context)) return Outcome.BLOCKED;
+            if (!hasPhotoAccess(context)) {
+                note(context, "Stopped: OrganizeIt doesn't have access to Photos.");
+                return Outcome.BLOCKED;
+            }
             JSONObject first = store.config();
             if (first == null || first.optString("apiUrl").isEmpty()) return Outcome.BLOCKED;
             JSONArray categories = new JSONArray(first.optJSONArray("categories") == null ? "[]" : first.optJSONArray("categories").toString());
             Set<String> skip = new HashSet<>();
+            Map<String, Integer> tries = new HashMap<>();
+            long pause = 0;
+            long waitedSince = 0;
             while (!stop.shouldStop()) {
                 // Re-read each round: the app may have sent a newer snapshot.
                 JSONObject config = store.config();
@@ -127,19 +156,53 @@ final class BackgroundSorter {
                 for (JSONObject asset : batch.assets) {
                     answers.add(pool.submit(() -> classify(asset, config, cats, categories)));
                 }
-                boolean blocked = false;
+                Answer problem = null;
+                int left = batch.waiting;
                 for (int i = 0; i < answers.size(); i++) {
-                    skip.add(batch.assets.get(i).optString("id"));
+                    String id = batch.assets.get(i).optString("id");
                     Answer answer;
                     try {
                         answer = answers.get(i).get();
                     } catch (Exception e) {
                         answer = Answer.SKIP;
                     }
-                    if (answer == Answer.BLOCKED) blocked = true;
+                    if (answer == Answer.SORTED) {
+                        skip.add(id);
+                        sorted++;
+                        left = Math.max(0, left - 1);
+                        if (progress != null) progress.waiting(left);
+                    } else if (answer == Answer.SKIP) {
+                        skip.add(id);
+                    } else if (answer == Answer.RETRY) {
+                        int n = tries.merge(id, 1, Integer::sum);
+                        if (n >= 4) skip.add(id);
+                        if (problem == null) problem = Answer.RETRY;
+                    } else if (answer == Answer.OFFLINE) {
+                        if (problem != Answer.PERMANENT) problem = Answer.OFFLINE;
+                    } else {
+                        problem = Answer.PERMANENT;
+                    }
                 }
-                if (blocked) return Outcome.BLOCKED;
-                if (progress != null) progress.waiting(Math.max(0, batch.waiting - batch.assets.size()));
+                if (problem == Answer.PERMANENT) {
+                    note(context, "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.");
+                    return Outcome.BLOCKED;
+                }
+                if (problem != null) {
+                    // Give the server (which can take a minute to wake) or the network time to come back.
+                    long now = System.currentTimeMillis();
+                    if (waitedSince == 0) waitedSince = now;
+                    if (now - waitedSince > 15 * 60_000L) {
+                        note(context, problem == Answer.OFFLINE
+                            ? "Stopped: couldn't reach the sorting server for 15 minutes."
+                            : "Stopped: the sorting server stayed busy for 15 minutes.");
+                        return Outcome.BLOCKED;
+                    }
+                    pause = Math.min(Math.max(pause * 2, 5), 60);
+                    for (long s = 0; s < pause && !stop.shouldStop(); s++) Thread.sleep(1000);
+                } else {
+                    pause = 0;
+                    waitedSince = 0;
+                }
             }
             return Outcome.STOPPED;
         } catch (Exception e) {
@@ -147,6 +210,7 @@ final class BackgroundSorter {
         } finally {
             pool.shutdownNow();
             running.set(false);
+            if (sorted > 0) note(context, "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background.");
         }
     }
 
@@ -223,7 +287,7 @@ final class BackgroundSorter {
     private Answer classify(JSONObject asset, JSONObject config, JSONArray categories, JSONArray learned) {
         String image;
         try {
-            Bitmap bitmap = MediaAssets.decode(context.getContentResolver(), MediaAssets.uriFor(asset.getString("id")), 1024);
+            Bitmap bitmap = MediaAssets.decode(context.getContentResolver(), MediaAssets.uriFor(asset.getString("id")), 768);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
             bitmap.recycle();
@@ -254,10 +318,9 @@ final class BackgroundSorter {
                 os.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
             int code = http.getResponseCode();
-            if (code != 200) {
-                // Wrong passcode, no AI key, or rate limited: stop and let the app deal with it.
-                return code == 401 || code == 429 || code == 503 ? Answer.BLOCKED : Answer.SKIP;
-            }
+            if (code == 401 || code == 503) return Answer.PERMANENT; // wrong passcode, or the server has no working AI key
+            if (code == 429 || code >= 500) return Answer.RETRY;
+            if (code != 200) return Answer.SKIP;
             ByteArrayOutputStream text = new ByteArrayOutputStream();
             try (InputStream in = http.getInputStream()) {
                 byte[] buf = new byte[8192];
@@ -273,7 +336,7 @@ final class BackgroundSorter {
             if (result.getDouble("confidence") >= REVIEW_BELOW) addCategory(learned, result.getString("section"), result.getString("category"));
             return Answer.SORTED;
         } catch (java.io.IOException e) {
-            return Answer.BLOCKED; // offline or the server is asleep
+            return Answer.OFFLINE; // no connection, or the server is asleep
         } catch (Exception e) {
             return Answer.SKIP;
         } finally {

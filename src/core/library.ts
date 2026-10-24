@@ -73,6 +73,34 @@ export function applyClassification(state: LibraryState, photoId: string, result
 }
 
 /**
+ * Files several classified photos at once (one save instead of one per photo), with the same
+ * rules as applyClassification. A photo with a catch-all answer is marked as an error.
+ */
+export function applyClassifications(state: LibraryState, results: { photoId: string; result: Classification }[], newId: () => string): Change {
+  let next = state;
+  const changed = new Set<string>();
+  for (const { photoId, result } of results) {
+    try {
+      next = applyClassification(next, photoId, result, newId).state;
+    } catch (err) {
+      // A catch-all answer is never filed; the photo is left for the person instead.
+      const error = err instanceof Error ? err.message : String(err);
+      next = { ...next, photos: next.photos.map((p) => (p.id === photoId ? { ...p, status: "error", error } : p)) };
+    }
+    changed.add(photoId);
+  }
+  const before = new Set(state.categories);
+  const kept = new Set(next.categories.map((c) => c.id));
+  return {
+    state: next,
+    putPhotos: next.photos.filter((p) => changed.has(p.id)),
+    putCategories: next.categories.filter((c) => !before.has(c)),
+    deletedCategoryIds: state.categories.filter((c) => !kept.has(c.id)).map((c) => c.id),
+    deletedPhotoIds: [],
+  };
+}
+
+/**
  * Moves photos to a category, given as an existing id or as a section + name typed by the
  * user. A typed name is matched against existing categories or becomes a new one, and
  * catch-all names are rejected.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
-import { applyClassification, movePhotos, removePhotos, renameCategory, type LibraryState } from "../src/core/library";
+import { applyClassification, applyClassifications, movePhotos, removePhotos, renameCategory, type LibraryState } from "../src/core/library";
 import { deletedNotice, formatBytes, usageByCategory } from "../src/core/storage";
 import type { Photo } from "../src/core/types";
 
@@ -78,6 +78,44 @@ describe("library", () => {
     const usage = usageByCategory(s.categories, s.photos).filter((u) => u.count);
     expect(usage.map((u) => [u.category.name, u.count, u.bytes])).toEqual([["Bags", 2, 6_000_000], ["Receipts", 1, 5_000_000]]);
     expect(formatBytes(6_000_000)).toBe("5.7 MB");
+  });
+});
+
+describe("applyClassifications", () => {
+  it("files a whole batch in one change", () => {
+    const s = start(photo("a"), photo("b"), photo("c"), photo("d"));
+    const c = applyClassifications(
+      s,
+      [
+        { photoId: "a", result: { section: "products", category: "Sneakers", label: "Jordan 1", confidence: 0.95 } },
+        { photoId: "b", result: { section: "products", category: "Sneakers", label: "Dunk Low", confidence: 0.9 } },
+        { photoId: "c", result: { section: "products", category: "Bags", label: "tote", confidence: 0.4 } },
+      ],
+      newId,
+    );
+    const [a, b, cc, d] = c.state.photos;
+    expect(a.status).toBe("sorted");
+    expect(b.categoryId).toBe(a.categoryId);
+    expect(cc.status).toBe("review");
+    expect(d.status).toBe("queued");
+    expect(c.putPhotos.map((p) => p.id)).toEqual(["a", "b", "c"]);
+    expect(c.putCategories.map((x) => x.name)).toEqual(["Sneakers"]);
+    expect(c.deletedCategoryIds).toEqual([]);
+  });
+
+  it("never files a catch-all, and still files the rest", () => {
+    const s = start(photo("a"), photo("b"));
+    const c = applyClassifications(
+      s,
+      [
+        { photoId: "a", result: { section: "products", category: "Other", label: "?", confidence: 0.9 } },
+        { photoId: "b", result: { section: "products", category: "Bags", label: "tote", confidence: 0.9 } },
+      ],
+      newId,
+    );
+    expect(c.state.photos[0].status).toBe("error");
+    expect(c.state.photos[1].status).toBe("sorted");
+    expect(c.state.categories.some((x) => /other/i.test(x.name))).toBe(false);
   });
 });
 

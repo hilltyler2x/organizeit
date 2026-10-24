@@ -3,7 +3,7 @@ import express, { type RequestHandler } from "express";
 import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ClassifyError, ClassifyRequest, classifyPhoto } from "./classify";
+import { ClassifyBatchRequest, ClassifyError, ClassifyRequest, classifyBatch, classifyPhoto } from "./classify";
 
 // Small API server. The Anthropic key stays here so neither the website nor a future
 // iOS/Android build ever ships it.
@@ -23,18 +23,19 @@ function requirePasscode(passcode: string | undefined): RequestHandler {
   };
 }
 
-// Simple per-IP cap so a leaked passcode can't run up a large bill.
+// Simple per-IP cap on photos sorted, so a leaked passcode can't run up a large bill.
 function rateLimit(perHour: number): RequestHandler {
   const hits = new Map<string, { start: number; count: number }>();
   return (req, res, next) => {
     const key = req.ip ?? "unknown";
+    const cost = Array.isArray(req.body?.photos) ? Math.max(1, req.body.photos.length) : 1;
     const now = Date.now();
-    const h = hits.get(key);
-    if (!h || now - h.start > 3_600_000) {
-      hits.set(key, { start: now, count: 1 });
+    let h = hits.get(key);
+    if (!h || now - h.start > 3_600_000) hits.set(key, (h = { start: now, count: 0 }));
+    if (h.count + cost <= perHour) {
+      h.count += cost;
       return next();
     }
-    if (++h.count <= perHour) return next();
     res.status(429).json({ error: "Hourly sorting limit reached. Try again later." });
   };
 }
@@ -62,7 +63,7 @@ export function createApp(client: Anthropic | null, options: { passcode?: string
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
-  app.use(express.json({ limit: "15mb" }));
+  app.use(express.json({ limit: "25mb" }));
   const gate = requirePasscode(options.passcode || undefined);
 
   app.get("/api/health", (_req, res) => {
@@ -73,18 +74,15 @@ export function createApp(client: Anthropic | null, options: { passcode?: string
     res.json({ ok: true });
   });
 
-  app.post("/api/classify", gate, rateLimit(options.perHour ?? 2000), async (req, res) => {
+  const limit = rateLimit(options.perHour ?? 10_000);
+
+  const handle = (run: (client: Anthropic, body: unknown) => Promise<unknown>): RequestHandler => async (req, res) => {
     if (!client) {
       res.status(503).json({ error: "AI sorting is not set up. Add ANTHROPIC_API_KEY to the server's environment." });
       return;
     }
-    const parsed = ClassifyRequest.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Invalid request." });
-      return;
-    }
     try {
-      res.json(await classifyPhoto(client, parsed.data));
+      res.json(await run(client, req.body));
     } catch (err) {
       if (err instanceof ClassifyError) {
         res.status(err.status).json({ error: err.message });
@@ -99,7 +97,22 @@ export function createApp(client: Anthropic | null, options: { passcode?: string
         res.status(500).json({ error: "Unexpected server error." });
       }
     }
-  });
+  };
+
+  const invalid = new ClassifyError("Invalid request.", 400);
+
+  app.post("/api/classify", gate, limit, handle(async (c, body) => {
+    const parsed = ClassifyRequest.safeParse(body);
+    if (!parsed.success) throw invalid;
+    return classifyPhoto(c, parsed.data);
+  }));
+
+  // Several photos per request: what the app uses while it is open.
+  app.post("/api/classify-batch", gate, limit, handle(async (c, body) => {
+    const parsed = ClassifyBatchRequest.safeParse(body);
+    if (!parsed.success) throw invalid;
+    return { results: await classifyBatch(c, parsed.data) };
+  }));
 
   return app;
 }
@@ -109,7 +122,7 @@ if (isMain) {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
   const app = createApp(hasKey ? new Anthropic() : null, {
     passcode: process.env.APP_PASSCODE,
-    perHour: Number(process.env.SORTS_PER_HOUR ?? 2000),
+    perHour: Number(process.env.SORTS_PER_HOUR ?? 10_000),
   });
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist");
   app.use(express.static(dist));

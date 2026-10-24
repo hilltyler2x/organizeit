@@ -144,3 +144,88 @@ describe("learning from corrections", () => {
     expect(calls[0].messages[0].content[1].text).not.toContain("Corrections");
   });
 });
+
+describe("POST /api/classify-batch", () => {
+  const photo = { image: "aGVsbG8=", mediaType: "image/jpeg", fileName: "IMG_1.jpg", width: 1170, height: 2532 };
+  const batch = (n: number, extra: object = {}) => ({
+    photos: Array.from({ length: n }, (_, i) => ({ ...photo, fileName: `IMG_${i + 1}.jpg` })),
+    categories: [{ section: "products", name: "Bags" }],
+    ...extra,
+  });
+
+  it("sorts several photos in one AI request, in order", async () => {
+    const { client, calls } = fakeClient([
+      {
+        photos: [
+          { photo: 2, section: "products", category: "Bags", label: "tote", confidence: 0.9 },
+          { photo: 1, section: "business", category: "Receipts", label: "Target receipt", confidence: 0.95 },
+          { photo: 3, section: "personal", category: "Pets", label: "dog", confidence: 0.4 },
+        ],
+      },
+    ]);
+    const r = await post(createApp(client), batch(3), {}, "/api/classify-batch");
+    expect(r.status).toBe(200);
+    expect(r.body.results.map((x: any) => x.category)).toEqual(["Receipts", "Bags", "Pets"]);
+    expect(r.body.results[2].confidence).toBe(0.4);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].messages[0].content.filter((b: any) => b.type === "image")).toHaveLength(3);
+    expect(calls[0].output_config.format.schema.required).toEqual(["photos"]);
+  });
+
+  it("passes corrections along", async () => {
+    const { client, calls } = fakeClient([
+      { photos: [1, 2].map((photo) => ({ photo, section: "products", category: "Sandals", label: "slides", confidence: 0.9 })) },
+    ]);
+    const lessons = [{ label: "black slides", section: "products", category: "Sandals", wrong: "Sneakers" }];
+    await post(createApp(client), batch(2, { lessons }), {}, "/api/classify-batch");
+    expect(calls[0].messages[0].content[0].text).toContain('"black slides" → products / Sandals (not Sneakers)');
+  });
+
+  it("sorts a photo on its own when the batch answer files it under a catch-all or skips it", async () => {
+    const { client, calls } = fakeClient([
+      {
+        photos: [
+          { photo: 1, section: "products", category: "Other", label: "misc", confidence: 0.3 },
+          { photo: 2, section: "products", category: "Bags", label: "tote", confidence: 0.9 },
+        ],
+      },
+      // Photo 1 on its own, then photo 3 on its own (order of the follow-up calls is not fixed).
+      { section: "products", category: "Sunglasses", label: "aviators", confidence: 0.8 },
+      { section: "products", category: "Sunglasses", label: "aviators", confidence: 0.8 },
+    ]);
+    const r = await post(createApp(client), batch(3), {}, "/api/classify-batch");
+    expect(r.body.results.map((x: any) => x.category)).toEqual(["Sunglasses", "Bags", "Sunglasses"]);
+    expect(calls).toHaveLength(3);
+    expect(r.body.results.some((x: any) => /^(other|misc)/i.test(x.category ?? ""))).toBe(false);
+  });
+
+  it("reports a photo it can't place without failing the others", async () => {
+    const { client } = fakeClient([
+      {
+        photos: [
+          { photo: 1, section: "products", category: "Bags", label: "tote", confidence: 0.9 },
+          { photo: 2, section: "products", category: "Other", label: "unknown item", confidence: 0.1 },
+        ],
+      },
+      { section: "products", category: "Misc", label: "misc", confidence: 0.1 },
+      { section: "products", category: "Uncategorized", label: "misc", confidence: 0.1 },
+    ]);
+    const r = await post(createApp(client), batch(2), {}, "/api/classify-batch");
+    expect(r.status).toBe(200);
+    expect(r.body.results[0].category).toBe("Bags");
+    expect(r.body.results[1].error).toBeTruthy();
+  });
+
+  it("rejects batches that are too big", async () => {
+    const { client } = fakeClient([]);
+    expect((await post(createApp(client), batch(9), {}, "/api/classify-batch")).status).toBe(400);
+  });
+
+  it("counts each photo against the hourly cap", async () => {
+    const answer = { photos: [1, 2].map((photo) => ({ photo, section: "products", category: "Bags", label: "tote", confidence: 0.9 })) };
+    const { client } = fakeClient([answer, answer]);
+    const app = createApp(client, { perHour: 3 });
+    expect((await post(app, batch(2), {}, "/api/classify-batch")).status).toBe(200);
+    expect((await post(app, batch(2), {}, "/api/classify-batch")).status).toBe(429);
+  });
+});

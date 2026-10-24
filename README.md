@@ -31,7 +31,9 @@ process on `PORT` (default 8787).
    Share → **Add to Home Screen** to get an app icon.
 
 The passcode keeps strangers from using your Anthropic credits, and each IP is capped at
-`SORTS_PER_HOUR` photos per hour (default 2000). On the free plan the server sleeps after
+`SORTS_PER_HOUR` photos per hour (default 10,000). `CLASSIFY_MODEL` picks the Claude model
+(default `claude-opus-5-5`); `claude-haiku-5-5` is much faster and cheaper, at some cost in
+accuracy. On the free plan the server sleeps after
 15 minutes idle, so the first sort after a break takes about a minute to start.
 
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
@@ -41,12 +43,15 @@ The passcode keeps strangers from using your Anthropic credits, and each IP is c
 1. **Add photos.** The browser photo picker opens the Photos library on iPhone and Android
    (multi-select), or pick files / a whole folder on a computer, or drag and drop.
    Originals stay on the device in IndexedDB.
-2. **Sort.** Each photo is shrunk to a ~1024px JPEG and sent to `POST /api/classify`. The
+2. **Sort.** Each photo is shrunk to a ~768px JPEG. The app sends them six at a time to
+   `POST /api/classify-batch`, with four requests in flight, so one AI call sorts several
+   photos (the phone's background sorter uses the one-photo `POST /api/classify`). The
    server asks Claude (`claude-opus-5-5`, low effort, JSON output) to choose a section
    (business, products, personal) and either reuse an existing category or name a new
    specific one. If the answer is a catch-all, the server asks once more, then falls back to
    a name built from the item description, and otherwise reports an error. It never files a
-   photo under a catch-all.
+   photo under a catch-all. In a batch, a photo the answer misses or files under a catch-all
+   gets its own request with the same retry.
 3. **Match.** `resolveCategory` matches the name against existing categories, ignoring case,
    plurals and common synonyms (Tees → Shirts, Cologne → Fragrance, Caps → Hats), so the
    list doesn't fill with near-duplicates.

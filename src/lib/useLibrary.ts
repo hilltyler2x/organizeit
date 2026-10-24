@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import {
-  applyClassification,
+  applyClassifications,
   movePhotos,
   removePhotos,
   renameCategory,
@@ -12,7 +12,7 @@ import {
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import type { Lesson, Photo, Section } from "../core/types";
-import { API, ApiError, classify, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
+import { API, ApiError, classifyBatch, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
@@ -23,7 +23,9 @@ import type { PickedPhoto } from "./photoSource";
 const newId = () => crypto.randomUUID();
 // Optional cap while testing: only the newest N photos on the phone are sorted.
 export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
-const CONCURRENCY = 3;
+// Photos go to the server several at a time, with a few requests in flight at once.
+const BATCH_SIZE = 6;
+const CONCURRENCY = 4;
 
 export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
@@ -41,7 +43,14 @@ export function useLibrary() {
   const lessonsRef = useRef<Lesson[]>([]);
   const [lessonCount, setLessonCount] = useState(0);
   const running = useRef(new Set<string>());
+  const batches = useRef(0);
   const attempts = useRef(new Map<string, number>());
+  // Photos whose request didn't reach the server, by photo id.
+  const networkFails = useRef(new Map<string, number>());
+  // When recent photos finished sorting, to estimate the time left.
+  const finished = useRef<number[]>([]);
+  const [sortRate, setSortRate] = useState<number | null>(null);
+  const [sortedThisRun, setSortedThisRun] = useState(0);
 
   const commit = useCallback(async (change: Change) => {
     stateRef.current = change.state;
@@ -85,12 +94,24 @@ export function useLibrary() {
     })();
   }, []);
 
+  // When the server last answered. A check that fails after a newer answer is stale and is
+  // ignored, so a slow check from before the app was in the background can't knock a working
+  // connection back to "Connecting…".
+  const lastAnswer = useRef(0);
+
+  const serverAnswered = useCallback(() => {
+    lastAnswer.current = Date.now();
+    setServer((s) => (s === "checking" || s === "offline" ? "ok" : s));
+  }, []);
+
   const checkServer = useCallback(async () => {
+    const started = Date.now();
     const s = await serverStatus();
     if (!s.reachable) {
-      setServer("offline");
+      if (lastAnswer.current < started) setServer("offline");
       return;
     }
+    lastAnswer.current = Date.now();
     setServer(s.ai ? "ok" : "no-ai");
     setAiProblem(null);
     setLocked(s.passcodeRequired && !hasPasscode());
@@ -100,11 +121,13 @@ export function useLibrary() {
     checkServer();
   }, [checkServer]);
 
-  // Keep trying while the server is unreachable, and check again when the app comes back.
+  // Keep trying until the server answers. This also covers a first check that never comes
+  // back (iOS can freeze a request when the app goes to the background), which used to leave
+  // "Connecting…" up for good.
   useEffect(() => {
-    if (server !== "offline") return;
-    const timer = setTimeout(checkServer, 10_000);
-    return () => clearTimeout(timer);
+    if (server !== "offline" && server !== "checking") return;
+    const timer = setInterval(checkServer, 10_000);
+    return () => clearInterval(timer);
   }, [server, checkServer]);
 
   useEffect(() => {
@@ -113,50 +136,110 @@ export function useLibrary() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [server, checkServer]);
 
-  const classifyOne = useCallback(async (photo: Photo) => {
-    await patchPhoto(photo.id, { status: "classifying", error: undefined });
+  const recordFinished = useCallback((count: number) => {
+    const now = Date.now();
+    const recent = finished.current.filter((t) => now - t < 120_000);
+    for (let i = 0; i < count; i++) recent.push(now);
+    finished.current = recent;
+    setSortedThisRun((n) => n + count);
+    const span = (now - recent[0]) / 1000;
+    // Photos per second over the last two minutes, once there is enough to go on.
+    setSortRate(recent.length >= 10 && span >= 5 ? recent.length / span : null);
+  }, []);
+
+  const markAll = useCallback(async (ids: string[], patch: (p: Photo) => Partial<Photo>) => {
+    const s = stateRef.current;
+    const set = new Set(ids);
+    const changed: Photo[] = [];
+    const photos = s.photos.map((p) => {
+      if (!set.has(p.id)) return p;
+      const next = { ...p, ...patch(p) };
+      changed.push(next);
+      return next;
+    });
+    await commit({ state: { ...s, photos }, putPhotos: changed, putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [] });
+  }, [commit]);
+
+  const classifyGroup = useCallback(async (group: Photo[]) => {
+    const ids = group.map((p) => p.id);
+    await markAll(ids, () => ({ status: "classifying", error: undefined }));
+    // A photo whose image can't be read fails on its own without holding up the rest.
+    const images = await Promise.all(group.map((p) => classifierImage(p).then((image) => ({ image }), (err: unknown) => ({ err }))));
+    const ready = group.filter((_, i) => "image" in images[i]);
+    const unreadable = group.filter((_, i) => !("image" in images[i]));
+    if (unreadable.length) {
+      await markAll(unreadable.map((p) => p.id), (p) => {
+        const err = (images[group.indexOf(p)] as { err: unknown }).err;
+        return { status: "error", error: err instanceof Error ? err.message : String(err) };
+      });
+    }
+    if (!ready.length) return;
+    const started = Date.now();
     try {
-      const result = await classify({
-        image: await classifierImage(photo),
-        mediaType: "image/jpeg",
-        fileName: photo.fileName,
-        width: photo.width,
-        height: photo.height,
-        isScreenshot: photo.isScreenshot ?? false,
+      const results = await classifyBatch({
+        photos: ready.map((photo) => ({
+          image: (images[group.indexOf(photo)] as { image: string }).image,
+          mediaType: "image/jpeg",
+          fileName: photo.fileName,
+          width: photo.width,
+          height: photo.height,
+          isScreenshot: photo.isScreenshot ?? false,
+        })),
         categories: stateRef.current.categories,
         lessons: lessonsForPrompt(lessonsRef.current, stateRef.current.categories),
       });
-      await commit(applyClassification(stateRef.current, photo.id, result, newId));
+      const filed = ready.flatMap((photo, i) => {
+        const r = results[i];
+        return "error" in r ? [] : [{ photoId: photo.id, result: r }];
+      });
+      if (filed.length) await commit(applyClassifications(stateRef.current, filed, newId));
+      const failed = ready.filter((_, i) => "error" in results[i]);
+      if (failed.length) {
+        await markAll(failed.map((p) => p.id), (p) => ({ status: "error", error: (results[ready.indexOf(p)] as { error: string }).error }));
+      }
+      serverAnswered();
+      recordFinished(ready.length);
     } catch (err) {
+      const backToQueue = () => markAll(ready.map((p) => p.id), () => ({ status: "queued", error: undefined }));
       if (err instanceof ApiError && err.status === 401) {
         // Wrong or missing passcode: wait in the queue until it is entered.
         setLocked(true);
-        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        await backToQueue();
         return;
       }
       if (err instanceof ApiError && err.status === 0) {
-        // Server unreachable: pause the queue until it answers again.
-        setServer("offline");
-        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        // Server unreachable: pause the queue until it answers again. If the server keeps
+        // answering its health check but these photos never get through, stop retrying them
+        // so one stuck photo can't hold the queue (and the banner) forever.
+        // Only counted while the server is answering, so a phone with no signal never gives up.
+        const serverUp = Date.now() - lastAnswer.current < 60_000;
+        const fails = ready.map((p) => (networkFails.current.get(p.id) ?? 0) + (serverUp ? 1 : 0));
+        ready.forEach((p, i) => networkFails.current.set(p.id, fails[i]));
+        if (Math.min(...fails) >= 3) {
+          await markAll(ready.map((p) => p.id), () => ({ status: "error", error: "Couldn't send this photo to the sorting server." }));
+        } else {
+          if (lastAnswer.current < started) setServer("offline");
+          await backToQueue();
+        }
         return;
       }
       if (err instanceof ApiError && err.status === 503) {
         // The server is up but can't use its Anthropic key.
         setServer("no-ai");
         setAiProblem(err.message);
-        await patchPhoto(photo.id, { status: "queued", error: undefined });
+        await backToQueue();
         return;
       }
-      const tries = (attempts.current.get(photo.id) ?? 0) + 1;
-      attempts.current.set(photo.id, tries);
-      const retryable = err instanceof ApiError && err.retryable && tries < 4;
-      await patchPhoto(photo.id, {
-        status: retryable ? "queued" : "error",
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      const retryable = err instanceof ApiError && err.retryable;
+      const tries = new Map(ready.map((p) => [p.id, (attempts.current.get(p.id) ?? 0) + 1]));
+      for (const [id, n] of tries) attempts.current.set(id, n);
+      await markAll(ready.map((p) => p.id), (p) =>
+        retryable && tries.get(p.id)! < 4 ? { status: "queued", error: undefined } : { status: "error", error: message },
+      );
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
     }
-  }, [commit, patchPhoto]);
+  }, [commit, markAll, recordFinished, serverAnswered]);
 
   // Reading the phone's library also collects what was sorted while the app was closed, so
   // the queue waits for it rather than sorting those photos a second time.
@@ -164,22 +247,36 @@ export function useLibrary() {
   // Until the library has been read once, the app can't tell the phone which photos are new.
   const scanned = useRef(false);
 
-  // Work through the queue a few photos at a time, newest first.
+  // Work through the queue newest first, a batch of photos per request and a few requests
+  // at a time.
   const pump = useCallback(() => {
     if (!ai || locked || scanning.current) return;
-    const free = CONCURRENCY - running.current.size;
+    const free = CONCURRENCY - batches.current;
     if (free <= 0) return;
     const queued = stateRef.current.photos
       .filter((p) => p.status === "queued" && !running.current.has(p.id))
-      .sort((a, b) => b.takenAt - a.takenAt);
-    for (const photo of queued.slice(0, free)) {
-      running.current.add(photo.id);
-      classifyOne(photo).finally(() => {
-        running.current.delete(photo.id);
+      .sort((a, b) => b.takenAt - a.takenAt)
+      .slice(0, free * BATCH_SIZE);
+    for (let i = 0; i < queued.length; i += BATCH_SIZE) {
+      const group = queued.slice(i, i + BATCH_SIZE);
+      batches.current++;
+      for (const p of group) running.current.add(p.id);
+      classifyGroup(group).finally(() => {
+        batches.current--;
+        for (const p of group) running.current.delete(p.id);
         pump();
       });
     }
-  }, [ai, locked, classifyOne]);
+  }, [ai, locked, classifyGroup]);
+
+  // Once the queue is empty, the next round of sorting starts its progress from zero.
+  const idle = !state.photos.some((p) => p.status === "queued" || p.status === "classifying");
+  useEffect(() => {
+    if (!idle) return;
+    finished.current = [];
+    setSortedThisRun(0);
+    setSortRate(null);
+  }, [idle]);
 
   useEffect(() => {
     if (ready) pump();
@@ -324,9 +421,10 @@ export function useLibrary() {
   const retry = useCallback(async (ids: string[]) => {
     for (const id of ids) {
       attempts.current.delete(id);
-      await patchPhoto(id, { status: "queued", error: undefined });
+      networkFails.current.delete(id);
     }
-  }, [patchPhoto]);
+    await markAll(ids, () => ({ status: "queued", error: undefined }));
+  }, [markAll]);
 
   return {
     ...state,
@@ -339,6 +437,9 @@ export function useLibrary() {
     canMakeAlbums,
     permission,
     scan,
+    /** Photos per second lately, or null until there is enough to estimate. */
+    sortRate,
+    sortedThisRun,
     background,
     connectLibrary,
     openSettings: () => PhotoLibrary.openSettings(),

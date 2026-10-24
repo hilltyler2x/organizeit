@@ -42,7 +42,9 @@ export type ServerStatus = { reachable: boolean; ai: boolean; passcodeRequired: 
  */
 export async function serverStatus(): Promise<ServerStatus> {
   try {
-    const r = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(90_000) });
+    // Kept short: the app checks again every 10 seconds until one gets through, and Render
+    // answers a request made once it has woken up.
+    const r = await fetch(`${API}/api/health`, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
     const body = await r.json();
     if (!r.ok) return { reachable: false, ai: false, passcodeRequired: false };
     return { reachable: true, ai: body.ai === true, passcodeRequired: body.passcodeRequired === true };
@@ -93,4 +95,46 @@ export async function classify(input: {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new ApiError(body.error ?? `Request failed (${r.status})`, r.status);
   return body as Classification;
+}
+
+export type PhotoForClassifier = {
+  image: string;
+  mediaType: "image/jpeg";
+  fileName: string;
+  width: number;
+  height: number;
+  isScreenshot: boolean;
+};
+
+/**
+ * Classifies several photos in one request. Results come back in the same order; a photo the
+ * AI couldn't place gets `{ error }` instead.
+ */
+export async function classifyBatch(input: {
+  photos: PhotoForClassifier[];
+  categories: Category[];
+  lessons: LessonForPrompt[];
+}): Promise<(Classification | { error: string })[]> {
+  let r: Response;
+  try {
+    r = await fetch(`${API}/api/classify-batch`, {
+      method: "POST",
+      // A request that hangs (dropped connection, frozen in the background) is given up on
+      // and retried rather than holding its photos forever.
+      signal: AbortSignal.timeout(180_000),
+      headers: { "content-type": "application/json", "x-organizeit-passcode": passcode },
+      body: JSON.stringify({
+        ...input,
+        categories: input.categories.map((c) => ({ section: c.section, name: c.name })),
+      }),
+    });
+  } catch {
+    throw new ApiError("Could not reach the OrganizeIt server.", 0);
+  }
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new ApiError(body.error ?? `Request failed (${r.status})`, r.status);
+  if (!Array.isArray(body.results) || body.results.length !== input.photos.length) {
+    throw new ApiError("The server sent back the wrong number of answers.", 502);
+  }
+  return body.results;
 }

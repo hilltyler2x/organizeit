@@ -154,6 +154,22 @@ final class BackgroundSortStore {
     }
 }
 
+/// What background sorting last did, so the app can show it. Kept in UserDefaults.
+struct BackgroundSortLog {
+    private static let defaults = UserDefaults.standard
+
+    static func note(_ message: String) {
+        NSLog("OrganizeIt background sort: \(message)")
+        defaults.set(message, forKey: "organizeit.background.last")
+        defaults.set(Date().timeIntervalSince1970 * 1000, forKey: "organizeit.background.lastAt")
+    }
+
+    static var last: (message: String, at: Double)? {
+        guard let message = defaults.string(forKey: "organizeit.background.last") else { return nil }
+        return (message, defaults.double(forKey: "organizeit.background.lastAt"))
+    }
+}
+
 public final class BackgroundSorter {
     public static let shared = BackgroundSorter()
 
@@ -169,6 +185,14 @@ public final class BackgroundSorter {
     private var active = true
     private var continuedTask: AnyObject?
     private var continuedTotal: Int64 = 0
+    /// How many photos the last run sorted, for the log.
+    private var lastRunSorted = 0
+
+    /// Logs how the last run ended, with how many photos it sorted.
+    private func noteRun(_ ending: String) {
+        let n = lastRunSorted
+        BackgroundSortLog.note(n == 0 ? ending : "Sorted \(n) photo\(n == 1 ? "" : "s") in the background. \(ending)")
+    }
 
     /// True while the app is on screen; the app sorts by itself then.
     var isAppActive: Bool {
@@ -245,16 +269,40 @@ public final class BackgroundSorter {
                 title: "Sorting photos",
                 subtitle: "\(waiting) to go")
             request.strategy = .fail // start now or not at all, so a stale request never blocks the next
+            // Marked before submitting: iOS may start the task (and set the real one) right away.
+            lock.lock()
+            continuedTask = NSNull()
+            lock.unlock()
             do {
                 try BGTaskScheduler.shared.submit(request)
-                lock.lock()
-                continuedTask = NSNull() // submitted, waiting for iOS to start it
-                lock.unlock()
             } catch {
-                NSLog("OrganizeIt: could not start background sorting: \(error)")
+                lock.lock()
+                if continuedTask is NSNull { continuedTask = nil }
+                lock.unlock()
+                BackgroundSortLog.note("iOS wouldn't start sorting in the background (\(error.localizedDescription)).")
             }
         }
         #endif
+    }
+
+    /// What the app shows about background sorting on this phone.
+    func status() -> [String: Any] {
+        var out: [String: Any] = [:]
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: out["backgroundRefresh"] = "on"
+        case .denied: out["backgroundRefresh"] = "off"
+        default: out["backgroundRefresh"] = "restricted"
+        }
+        var continued = false
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) { continued = true }
+        #endif
+        out["keepsGoingAfterClose"] = continued
+        if let last = BackgroundSortLog.last {
+            out["last"] = last.message
+            out["lastAt"] = last.at
+        }
+        return out
     }
 
     // MARK: - Running
@@ -264,7 +312,8 @@ public final class BackgroundSorter {
         case finished
         /// Asked to stop (time is up, or the app came back).
         case stopped
-        /// Can't sort right now: no access, no server, wrong passcode, or the AI is busy.
+        /// Can't sort right now: no photo access, wrong passcode, no AI key, or the server
+        /// stayed unreachable after several tries.
         case blocked
         /// Another run is already sorting.
         case busy
@@ -285,61 +334,106 @@ public final class BackgroundSorter {
     }
 
     /// Sorts waiting photos, a few at a time, until none are left or `shouldStop` says so.
-    /// `progress` is told how many are still waiting after each batch.
+    /// `progress` is told how many are still waiting after each photo. A dropped connection, a
+    /// sleeping server or a busy AI is waited out with growing pauses, as the app's own queue
+    /// does, rather than ending the run.
     func run(shouldStop: @escaping () -> Bool, progress: ((Int) -> Void)? = nil) async -> Outcome {
         guard claim() else { return .busy }
         defer { release() }
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        guard status == .authorized || status == .limited else { return .blocked }
+        guard status == .authorized || status == .limited else {
+            lastRunSorted = 0
+            noteRun("Stopped: OrganizeIt doesn't have access to Photos.")
+            return .blocked
+        }
         guard let first = store.load().config, !first.apiUrl.isEmpty else { return .blocked }
         var categories = first.categories
         var skip = Set<String>()
+        var tries: [String: Int] = [:]
+        var pause: UInt64 = 0
+        var waitedSince: Date?
+        var sorted = 0
+        defer { lastRunSorted = sorted }
         while !shouldStop() {
             // Re-read each round: the app may have sent a newer snapshot.
             let (stored, results) = store.load()
             guard let config = stored else { return .blocked }
             for c in config.categories where !categories.contains(c) { categories.append(c) }
             skip.formUnion(results.map { $0.asset.id })
-            let (batch, waiting) = nextBatch(config, skipping: skip, size: 3)
+            let (batch, waiting) = nextBatch(config, skipping: &skip, size: 3)
             if batch.isEmpty { return .finished }
-            var blocked = false
+            var left = waiting
+            var problem: SortError?
             await withTaskGroup(of: (PHAsset, Result<Classification, SortError>).self) { group in
                 for asset in batch {
                     let cats = categories
                     group.addTask { (asset, await self.classify(asset, config: config, categories: cats)) }
                 }
                 for await (asset, outcome) in group {
-                    skip.insert(asset.localIdentifier)
+                    let id = asset.localIdentifier
                     switch outcome {
                     case .success(let result):
+                        skip.insert(id)
                         store.add(BackgroundResult(asset: DeviceAsset(asset), result: result))
+                        sorted += 1
                         // Same threshold as REVIEW_BELOW in src/core/library.ts.
                         let named = CategoryName(section: result.section, name: result.category)
                         if result.confidence >= 0.6 && !categories.contains(named) { categories.append(named) }
-                    case .failure(.blocked):
-                        blocked = true
+                        left = max(0, left - 1)
+                        progress?(left)
                     case .failure(.skip):
-                        break // left for the app, which retries and shows errors
+                        skip.insert(id) // left for the app, which retries and shows errors
+                    case .failure(.retry):
+                        tries[id, default: 0] += 1
+                        if tries[id]! >= 4 { skip.insert(id) }
+                        if problem == nil { problem = .retry }
+                    case .failure(.offline):
+                        if problem != .permanent { problem = .offline }
+                    case .failure(.permanent):
+                        problem = .permanent
                     }
                 }
             }
-            if blocked { return .blocked }
-            progress?(max(0, waiting - batch.count))
+            switch problem {
+            case .permanent?:
+                lastRunSorted = sorted
+                noteRun("Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.")
+                return .blocked
+            case .offline?, .retry?:
+                // Give the server (which can take a minute to wake) or the network time to come back.
+                let since = waitedSince ?? Date()
+                waitedSince = since
+                if Date().timeIntervalSince(since) > 15 * 60 {
+                    lastRunSorted = sorted
+                    noteRun(problem == .offline
+                        ? "Stopped: couldn't reach the sorting server for 15 minutes."
+                        : "Stopped: the sorting server stayed busy for 15 minutes.")
+                    return .blocked
+                }
+                pause = min(max(pause * 2, 5), 60)
+                for _ in 0..<pause where !shouldStop() {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            default:
+                pause = 0
+                waitedSince = nil
+            }
         }
         return .stopped
     }
 
     /// The next photos to sort: ones the app queued, then ones taken since it was last open.
-    private func nextBatch(_ config: BackgroundSortConfig, skipping skip: Set<String>, size: Int) -> ([PHAsset], Int) {
-        let queued = config.queued.filter { !skip.contains($0) }
+    private func nextBatch(_ config: BackgroundSortConfig, skipping skip: inout Set<String>, size: Int) -> ([PHAsset], Int) {
+        let queued = config.queued.filter { [skip] in !skip.contains($0) }
         let queuedSet = Set(config.queued)
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.fetchLimit = 500
         var fresh: [PHAsset] = []
+        let skipped = skip
         PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
-            if !skip.contains(asset.localIdentifier) && !queuedSet.contains(asset.localIdentifier) { fresh.append(asset) }
+            if !skipped.contains(asset.localIdentifier) && !queuedSet.contains(asset.localIdentifier) { fresh.append(asset) }
         }
         var batch: [PHAsset] = []
         if !queued.isEmpty {
@@ -347,19 +441,28 @@ public final class BackgroundSorter {
             let found = PHAsset.fetchAssets(withLocalIdentifiers: wanted, options: nil)
             var byId: [String: PHAsset] = [:]
             found.enumerateObjects { asset, _, _ in byId[asset.localIdentifier] = asset }
+            for id in wanted where byId[id] == nil { skip.insert(id) } // deleted since
             batch = wanted.compactMap { byId[$0] }.prefix(size).map { $0 }
         }
         for asset in fresh where batch.count < size { batch.append(asset) }
+        // Every queued photo in this round was deleted: look again past them.
+        if batch.isEmpty && queued.count > 0 { return nextBatch(config, skipping: &skip, size: size) }
         return (batch, queued.count + fresh.count)
     }
 
     enum SortError: Error {
-        case blocked
+        /// Wrong passcode or no AI key: retrying won't help.
+        case permanent
+        /// No connection, or the server is asleep or unreachable.
+        case offline
+        /// The server or AI is busy or had a hiccup: try this photo again shortly.
+        case retry
+        /// This photo can't be sorted here (unreadable image, rejected request).
         case skip
     }
 
     private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName]) async -> Result<Classification, SortError> {
-        guard let jpeg = await image(asset, maxSide: 1024, quality: 0.8) else { return .failure(.skip) }
+        guard let jpeg = await image(asset, maxSide: 768, quality: 0.8) else { return .failure(.skip) }
         let info = DeviceAsset(asset)
         let body: [String: Any] = [
             "image": jpeg.base64EncodedString(),
@@ -376,7 +479,7 @@ public final class BackgroundSorter {
             }
         ]
         guard let url = URL(string: config.apiUrl + "/api/classify"),
-              let payload = try? JSONSerialization.data(withJSONObject: body) else { return .failure(.blocked) }
+              let payload = try? JSONSerialization.data(withJSONObject: body) else { return .failure(.permanent) }
         var request = URLRequest(url: url, timeoutInterval: 90) // the free server can take a minute to wake
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -386,10 +489,13 @@ public final class BackgroundSorter {
             let (data, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200, let result = try? JSONDecoder().decode(Classification.self, from: data) { return .success(result) }
-            // Wrong passcode, no AI key, or rate limited: stop and let the app deal with it.
-            return [401, 429, 503].contains(code) ? .failure(.blocked) : .failure(.skip)
+            switch code {
+            case 401, 503: return .failure(.permanent) // wrong passcode, or the server has no working AI key
+            case 429, 500...599: return .failure(.retry)
+            default: return .failure(.skip)
+            }
         } catch {
-            return .failure(.blocked) // offline, server asleep, or cancelled
+            return .failure(.offline) // no connection, server asleep, or cancelled
         }
     }
 
@@ -419,6 +525,11 @@ public final class BackgroundSorter {
         scheduleBackgroundTasks()
         let work = Task {
             let outcome = await self.run(shouldStop: { Task.isCancelled })
+            switch outcome {
+            case .finished: self.noteRun("All caught up.")
+            case .stopped: self.noteRun("iOS ended this background run; it picks when the next one is.")
+            default: break
+            }
             task.setTaskCompleted(success: outcome != .blocked)
         }
         task.expirationHandler = { work.cancel() }
@@ -441,7 +552,11 @@ public final class BackgroundSorter {
             }
         }
         let work = Task {
-            _ = await self.run(shouldStop: { Task.isCancelled || self.isAppActive })
+            let outcome = await self.run(shouldStop: { Task.isCancelled || self.isAppActive })
+            if outcome == .finished { self.noteRun("All caught up.") }
+            if outcome == .stopped && !self.isAppActive {
+                self.noteRun("iOS paused sorting about 30 seconds after the app was closed.")
+            }
             finish()
         }
         holder.id = UIApplication.shared.beginBackgroundTask(withName: "Sort photos") {
@@ -470,6 +585,7 @@ public final class BackgroundSorter {
         continuedTask = task
         continuedTotal = 0
         lock.unlock()
+        BackgroundSortLog.note("Sorting will carry on after you close the app.")
         let work = Task {
             var success = true
             while !Task.isCancelled {
@@ -483,7 +599,7 @@ public final class BackgroundSorter {
                 let outcome = await self.run(shouldStop: { Task.isCancelled || self.isAppActive }) { waiting in
                     self.report(task, waiting: waiting)
                 }
-                if outcome == .finished { break }
+                if outcome == .finished { self.noteRun("All caught up."); break }
                 if outcome == .blocked { success = false; break }
                 if outcome == .busy { try? await Task.sleep(nanoseconds: 2_000_000_000) }
             }
@@ -492,7 +608,10 @@ public final class BackgroundSorter {
             self.lock.unlock()
             task.setTaskCompleted(success: success)
         }
-        task.expirationHandler = { work.cancel() }
+        task.expirationHandler = {
+            BackgroundSortLog.note("Background sorting was stopped (from the progress indicator, or by iOS).")
+            work.cancel()
+        }
     }
     #endif
 }

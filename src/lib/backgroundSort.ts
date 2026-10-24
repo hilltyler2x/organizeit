@@ -18,9 +18,20 @@ export interface BackgroundSortConfig {
   knownUpTo: number;
 }
 
+export interface BackgroundSortStatus {
+  /** iPhone: Settings → General → Background App Refresh. Android: battery restrictions. */
+  backgroundRefresh: "on" | "off" | "restricted";
+  /** Sorting carries on after the app is closed (iOS 26+, Android), not just ~30 seconds. */
+  keepsGoingAfterClose: boolean;
+  /** What background sorting last did, and when (ms). */
+  last?: string;
+  lastAt?: number;
+}
+
 interface BackgroundSortPlugin {
   configure(config: BackgroundSortConfig): Promise<void>;
   takeResults(): Promise<{ results: BackgroundResult[] }>;
+  status(): Promise<BackgroundSortStatus>;
 }
 
 export const BackgroundSort = registerPlugin<BackgroundSortPlugin>("BackgroundSort");

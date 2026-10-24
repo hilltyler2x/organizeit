@@ -13,7 +13,7 @@ import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import type { Lesson, Photo, Section } from "../core/types";
 import { API, ApiError, classify, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
-import { BackgroundSort } from "./backgroundSort";
+import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
@@ -36,6 +36,7 @@ export function useLibrary() {
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
+  const [background, setBackground] = useState<BackgroundSortStatus | null>(null);
   const stateRef = useRef(state);
   const lessonsRef = useRef<Lesson[]>([]);
   const [lessonCount, setLessonCount] = useState(0);
@@ -200,6 +201,7 @@ export function useLibrary() {
       const { results } = await BackgroundSort.takeResults().catch(() => ({ results: [] }));
       if (results.length) await commit(applyBackgroundResults(stateRef.current, results, newId));
       scanned.current = true;
+      BackgroundSort.status().then(setBackground, () => setBackground(null));
     } finally {
       setScan(null);
       scanning.current = false;
@@ -326,6 +328,7 @@ export function useLibrary() {
     native: isNativeApp,
     permission,
     scan,
+    background,
     connectLibrary,
     openSettings: () => PhotoLibrary.openSettings(),
     unlock: async (code: string) => {

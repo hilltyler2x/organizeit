@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isBannedCategoryName } from "../core/categories";
 import { formatBytes } from "../core/storage";
 import { SECTIONS, type Category, type Photo } from "../core/types";
+import { albumsCopyPhotos } from "../lib/photoLibrary";
 import type { Library } from "../lib/useLibrary";
 import { AlbumDialog } from "./AlbumDialog";
+import { BackLayer, useBack } from "./back";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoMenu, copyAndShare, type MenuItem } from "./PhotoMenu";
 import { PhotoViewer } from "./PhotoViewer";
@@ -29,6 +31,12 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
   const header = useRef<HTMLElement>(null);
   const headerGone = useScrolledPast(header);
   const press = useLongPress((id) => setMenuFor(photos.find((p) => p.id === id) ?? null));
+
+  useBack(selecting, () => {
+    setSelecting(false);
+    setSelected(new Set());
+  }, BackLayer.select);
+  useBack(renaming, () => setRenaming(false), BackLayer.dialog);
 
   useEffect(() => {
     setSelected(new Set());
@@ -224,7 +232,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
               const { added, created } = await lib.addToAlbum(albuming, title);
               setAlbuming(null);
               doneWith(albuming);
-              setNotice(`Added ${added} photo${added === 1 ? "" : "s"} to ${created ? "new album " : ""}"${title}" in Photos.`);
+              setNotice(`Added ${added} photo${added === 1 ? "" : "s"} to ${created ? "new album " : ""}"${title}"${albumsCopyPhotos ? "" : " in Photos"}.`);
             })
           }
         />

@@ -127,9 +127,11 @@ final class BackgroundSorter {
         if (!running.compareAndSet(false, true)) return Outcome.BUSY;
         ExecutorService pool = Executors.newFixedThreadPool(BATCH);
         int sorted = 0;
+        // How the run ended, logged with how many photos it sorted (as on iOS).
+        String ending = null;
         try {
             if (!hasPhotoAccess(context)) {
-                note(context, "Stopped: OrganizeIt doesn't have access to Photos.");
+                ending = "Stopped: OrganizeIt doesn't have access to Photos.";
                 return Outcome.BLOCKED;
             }
             JSONObject first = store.config();
@@ -150,7 +152,10 @@ final class BackgroundSorter {
                     if (asset != null) skip.add(asset.optString("id"));
                 }
                 Batch batch = nextBatch(config, skip);
-                if (batch.assets.isEmpty()) return Outcome.FINISHED;
+                if (batch.assets.isEmpty()) {
+                    ending = "All caught up.";
+                    return Outcome.FINISHED;
+                }
                 List<Future<Answer>> answers = new ArrayList<>();
                 final JSONArray cats = new JSONArray(categories.toString());
                 for (JSONObject asset : batch.assets) {
@@ -184,7 +189,7 @@ final class BackgroundSorter {
                     }
                 }
                 if (problem == Answer.PERMANENT) {
-                    note(context, "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.");
+                    ending = "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.";
                     return Outcome.BLOCKED;
                 }
                 if (problem != null) {
@@ -192,7 +197,7 @@ final class BackgroundSorter {
                     long now = System.currentTimeMillis();
                     if (waitedSince == 0) waitedSince = now;
                     if (now - waitedSince > 15 * 60_000L) {
-                        note(context, problem == Answer.OFFLINE
+                        ending = (problem == Answer.OFFLINE
                             ? "Stopped: couldn't reach the sorting server for 15 minutes."
                             : "Stopped: the sorting server stayed busy for 15 minutes.");
                         return Outcome.BLOCKED;
@@ -210,7 +215,8 @@ final class BackgroundSorter {
         } finally {
             pool.shutdownNow();
             running.set(false);
-            if (sorted > 0) note(context, "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background.");
+            String done = sorted == 0 ? null : "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background.";
+            if (done != null || ending != null) note(context, done == null ? ending : ending == null ? done : done + " " + ending);
         }
     }
 
@@ -266,8 +272,8 @@ final class BackgroundSorter {
         }
         long knownUpTo = (long) config.optDouble("knownUpTo", 0);
         int fresh = 0;
-        String where = "(" + MediaStore.Images.Media.DATE_TAKEN + " > ? OR " + MediaStore.Images.Media.DATE_ADDED + " > ?)";
-        String[] args = { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) };
+        String where = "(" + MediaStore.Images.Media.DATE_TAKEN + " > ? OR " + MediaStore.Images.Media.DATE_ADDED + " > ?) AND " + MediaAssets.notAlbumCopy();
+        String[] args = MediaAssets.concat(new String[] { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) }, MediaAssets.albumArgs());
         String order = MediaStore.Images.Media.DATE_ADDED + " DESC";
         try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), where, args, order)) {
             if (c != null && c.moveToFirst()) {

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { formatBytes } from "../core/storage";
 import type { Category, Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
+import { BackLayer, useBack } from "./back";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoMenu, copyAndShare } from "./PhotoMenu";
 import { useLongPress } from "./selection";
@@ -12,6 +13,7 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
   const url = useImageUrl(photo, "full");
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
+  useBack(true, props.onClose, BackLayer.dialog);
   const [menu, setMenu] = useState(false);
   const press = useLongPress(() => setMenu(true));
 

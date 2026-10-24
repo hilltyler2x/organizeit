@@ -394,7 +394,7 @@ export function useLibrary() {
     await commit(markCategorySeen(stateRef.current, categoryId));
   }, [commit]);
 
-  /** Puts photos from the phone's library into a Photos album (iPhone app only). */
+  /** Puts photos from the phone's library into an album (iPhone and Android apps). */
   const addToAlbum = useCallback(async (ids: string[], title: string) => {
     const idSet = new Set(ids);
     const assetIds = stateRef.current.photos

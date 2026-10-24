@@ -71,6 +71,29 @@ final class MediaAssets {
         return a;
     }
 
+    /** Where OrganizeIt puts album copies (addToAlbum): Pictures/OrganizeIt/<album>/. */
+    static final String ALBUMS_PATH = "Pictures/OrganizeIt/";
+
+    /**
+     * Leaves out OrganizeIt's own album copies, so they aren't sorted a second time. Pass the
+     * result as a query's selection, with albumArgs() (AND-ed onto any other condition).
+     */
+    static String notAlbumCopy() {
+        if (Build.VERSION.SDK_INT < 29) return "1";
+        return "(" + MediaStore.Images.Media.RELATIVE_PATH + " IS NULL OR " + MediaStore.Images.Media.RELATIVE_PATH + " NOT LIKE ?)";
+    }
+
+    static String[] albumArgs() {
+        return Build.VERSION.SDK_INT < 29 ? new String[0] : new String[] { ALBUMS_PATH + "%" };
+    }
+
+    static String[] concat(String[] a, String[] b) {
+        String[] out = new String[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
     static Uri uriFor(String id) {
         return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, Long.parseLong(id));
     }

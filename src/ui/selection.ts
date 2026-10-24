@@ -18,15 +18,18 @@ export function useScrolledPast(ref: RefObject<HTMLElement | null>) {
 const HOLD_MS = 450;
 
 /**
- * Press and hold a photo to start selecting with it. Spread the returned handlers on the
- * tile, and call `consumed()` in its click handler: it is true for the click that ends a hold.
+ * Press and hold a photo (or right-click it with a mouse) to bring up its menu. Spread the
+ * returned handlers on the tile, and call `consumed()` in its click handler: it is true for
+ * the click that ends a hold.
  */
 export function useLongPress(onHold: (id: string) => void) {
   const timer = useRef<number | undefined>(undefined);
-  const start = useRef<{ x: number; y: number } | null>(null);
+  const start = useRef<{ x: number; y: number; pointer: number } | null>(null);
   const held = useRef(false);
+  const touch = useRef(false);
 
-  const cancel = () => {
+  const cancel = (e: PointerEvent) => {
+    if (start.current?.pointer !== e.pointerId) return; // e.g. a mouse leaving while a finger holds
     window.clearTimeout(timer.current);
     start.current = null;
   };
@@ -35,7 +38,9 @@ export function useLongPress(onHold: (id: string) => void) {
     handlers: (id: string) => ({
       onPointerDown: (e: PointerEvent) => {
         held.current = false;
-        start.current = { x: e.clientX, y: e.clientY };
+        touch.current = e.pointerType !== "mouse";
+        if (!touch.current) return;
+        start.current = { x: e.clientX, y: e.clientY, pointer: e.pointerId };
         window.clearTimeout(timer.current);
         timer.current = window.setTimeout(() => {
           held.current = true;
@@ -45,12 +50,15 @@ export function useLongPress(onHold: (id: string) => void) {
       },
       // Scrolling the grid is not a hold.
       onPointerMove: (e: PointerEvent) => {
-        if (start.current && Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) > 10) cancel();
+        if (start.current && Math.hypot(e.clientX - start.current.x, e.clientY - start.current.y) > 10) cancel(e);
       },
       onPointerUp: cancel,
       onPointerCancel: cancel,
       onPointerLeave: cancel,
-      onContextMenu: (e: MouseEvent) => e.preventDefault(),
+      onContextMenu: (e: MouseEvent) => {
+        e.preventDefault();
+        if (!touch.current) onHold(id); // a touch hold already opened it
+      },
     }),
     consumed: () => {
       const was = held.current;

@@ -18,6 +18,10 @@ interface PhotoLibraryPlugin {
   addListener(event: "libraryChanged", listener: (info: { added?: number }) => void): Promise<PluginListenerHandle>;
   /** iOS only. Adds photos to a Photos album, creating it if needed. */
   addToAlbum(options: { ids: string[]; title: string }): Promise<{ added: number; title: string; created: boolean }>;
+  /** Copies a photo to the clipboard so it can be pasted into other apps. */
+  copyImage(options: { id: string }): Promise<void>;
+  /** Opens the phone's share sheet for a photo. */
+  shareImage(options: { id: string }): Promise<{ completed: boolean }>;
 }
 
 export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");

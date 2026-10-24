@@ -45,6 +45,17 @@ export function formatBytes(bytes: number): string {
   return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${units[i]}`;
 }
 
+/** Where deleted photos went, for the note shown after a delete. */
+export type DeleteTarget = "ios" | "android" | "organizeit";
+
+/** The note shown after deleting photos: how many, how much space, and where they went. */
+export function deletedNotice(count: number, bytes: number, target: DeleteTarget): string {
+  const what = `${count} photo${count === 1 ? "" : "s"} (${formatBytes(bytes)})`;
+  if (target === "ios") return `Deleted ${what} from your iPhone. They stay in Recently Deleted in Photos for 30 days; empty it there to get the space back now.`;
+  if (target === "android") return `Deleted ${what} from your phone.`;
+  return `Removed ${what} from OrganizeIt.`;
+}
+
 /** Categories the AI created that no longer hold any photos; these get cleaned up. */
 export function emptyCreatedCategories(categories: Category[], photos: Photo[]): Category[] {
   const used = new Set(photos.filter((p) => p.categoryId).map((p) => p.categoryId));

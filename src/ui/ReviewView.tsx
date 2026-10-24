@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { categoryMatchKey, tidyCategoryName } from "../core/categories";
 import { needsPerson } from "../core/library";
 import { formatBytes } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
+import { useLongPress, useScrolledPast } from "./selection";
 import { Thumb, forgetImages } from "./Thumb";
 
 // Photos the AI wasn't sure about (or couldn't sort). This is a to-do list, not a category:
@@ -17,6 +18,13 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
   // Photos the move dialog is open for: one tapped photo, or the selection.
   const [moving, setMoving] = useState<Photo[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const header = useRef<HTMLElement>(null);
+  const headerGone = useScrolledPast(header);
+  const press = useLongPress((id) => {
+    setSelecting(true);
+    setSelected((s) => new Set(s).add(id));
+  });
 
   // Drop selections for photos that have left the list.
   useEffect(() => {
@@ -50,6 +58,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
 
   const run = async (fn: () => Promise<unknown>) => {
     setError("");
+    setNotice("");
     try {
       await fn();
     } catch (e) {
@@ -62,14 +71,18 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     setSelecting(false);
   };
 
-  const deleteSelected = () => {
-    const ids = chosen.map((p) => p.id);
-    const bytes = chosen.reduce((n, p) => n + p.bytes, 0);
+  const deletePhotos = (list: Photo[]) => {
+    const ids = list.map((p) => p.id);
+    const bytes = list.reduce((n, p) => n + p.bytes, 0);
+    // In the app the phone shows its own delete confirmation.
     if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(bytes)}) from OrganizeIt?`)) return;
     run(async () => {
-      if (!(await lib.remove(ids))) return;
+      const deleted = await lib.remove(ids);
+      if (!deleted) return;
       forgetImages(ids);
+      setMoving(null);
       clearSelection();
+      setNotice(deleted);
     });
   };
 
@@ -85,6 +98,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     return (
       <section className="review-view">
         <div className="empty">
+          {notice && <p className="banner ok" role="status">{notice}</p>}
           <h1>All caught up</h1>
           <p className="muted">Every photo is in a category. If OrganizeIt isn't sure about a new one, it will show up here.</p>
           <button className="primary" onClick={onDone}>Back to overview</button>
@@ -95,19 +109,20 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
 
   return (
     <section className="review-view">
-      <header className="category-header">
+      <header className="category-header" ref={header}>
         <div>
           <p className="eyebrow">To review</p>
           <h1>Help sort {photos.length} photo{photos.length === 1 ? "" : "s"}</h1>
           <p className="muted">
-            OrganizeIt wasn't sure where these go. Tap a photo to choose its category, or tap Select to send several to the
-            same place. Each answer teaches OrganizeIt{lib.lessonCount ? ` (it has learned from ${lib.lessonCount} so far)` : ""}.
+            OrganizeIt wasn't sure where these go. Tap a photo to choose its category or delete it, or tap Select to send
+            several to the same place or delete them together. Each answer teaches OrganizeIt{lib.lessonCount ? ` (it has learned from ${lib.lessonCount} so far)` : ""}.
           </p>
         </div>
         <button onClick={() => (selecting ? clearSelection() : setSelecting(true))}>{selecting ? "Done" : "Select"}</button>
       </header>
 
       {error && <p className="error banner">{error}</p>}
+      {notice && <p className="banner ok" role="status">{notice}</p>}
 
       {guesses.length > 0 && (
         <div className="guess-groups">
@@ -135,7 +150,11 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
               aria-pressed={selecting ? selected.has(p.id) : undefined}
               aria-label={p.label ?? p.fileName}
               title={p.error}
-              onClick={() => (selecting ? toggle(p.id) : setMoving([p]))}
+              {...press.handlers(p.id)}
+              onClick={() => {
+                if (press.consumed()) return;
+                selecting ? toggle(p.id) : setMoving([p]);
+              }}
             >
               <Thumb photo={p} alt={p.label ?? p.fileName} />
               {selecting && <span className="check" aria-hidden>{selected.has(p.id) ? "✓" : ""}</span>}
@@ -158,8 +177,13 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
             <button onClick={() => run(async () => { await lib.retry(failed.map((p) => p.id)); setSelected(new Set()); })}>Retry</button>
           )}
           <button className="primary" disabled={!selected.size} onClick={() => setMoving(chosen)}>Move</button>
-          <button className="danger" disabled={!selected.size} onClick={deleteSelected}>Delete</button>
+          <button className="danger" disabled={!selected.size} onClick={() => deletePhotos(chosen)}>Delete</button>
+          <button onClick={clearSelection}>Done</button>
         </div>
+      )}
+
+      {!selecting && headerGone && (
+        <button className="floating-select" onClick={() => setSelecting(true)}>Select</button>
       )}
 
       {moving && (
@@ -171,6 +195,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
           suggestion={sharedGuess(moving)}
           defaultSection={sharedGuess(moving)?.section ?? moving[0]?.suggestion?.section ?? "products"}
           onClose={() => setMoving(null)}
+          onDelete={() => deletePhotos(moving)}
           onMove={(target) =>
             run(async () => {
               await lib.move(moving.map((p) => p.id), target);

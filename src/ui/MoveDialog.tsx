@@ -16,6 +16,8 @@ export function MoveDialog(props: {
   /** The AI's best guess, offered as a one-tap answer. */
   suggestion?: { section: Section; category: string };
   onMove: (target: MoveTarget) => void;
+  /** Offered next to the guess, for photos the person would rather get rid of than file. */
+  onDelete?: () => void;
   onClose: () => void;
 }) {
   const [section, setSection] = useState<Section>(props.defaultSection);
@@ -46,16 +48,25 @@ export function MoveDialog(props: {
             ))}
           </ul>
         )}
-        {guess && (
+        {(guess || props.onDelete) && (
           <div className="guess">
-            <span className="muted small">OrganizeIt's guess</span>
-            <button
-              className="chip primary"
-              onClick={() => props.onMove(guessMatch ? { categoryId: guessMatch.id } : { section: guess.section, name: guess.category })}
-            >
-              {guessName}
-              <span className="small"> · {SECTIONS.find((s) => s.id === guess.section)!.label}</span>
-            </button>
+            {guess && (
+              <>
+                <span className="muted small">OrganizeIt's guess</span>
+                <button
+                  className="chip primary"
+                  onClick={() => props.onMove(guessMatch ? { categoryId: guessMatch.id } : { section: guess.section, name: guess.category })}
+                >
+                  {guessName}
+                  <span className="small"> · {SECTIONS.find((s) => s.id === guess.section)!.label}</span>
+                </button>
+              </>
+            )}
+            {props.onDelete && (
+              <button className="chip danger" onClick={props.onDelete}>
+                {props.count === 1 ? "Delete photo" : `Delete ${props.count} photos`}
+              </button>
+            )}
           </div>
         )}
         <div className="segmented" role="tablist">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
 import { applyClassification, applyClassifications, movePhotos, removePhotos, renameCategory, type LibraryState } from "../src/core/library";
-import { formatBytes, usageByCategory } from "../src/core/storage";
+import { deletedNotice, formatBytes, usageByCategory } from "../src/core/storage";
 import type { Photo } from "../src/core/types";
 
 let n = 0;
@@ -146,5 +146,15 @@ describe("syncWithDevice", () => {
     const { syncWithDevice } = await import("../src/core/library");
     const s = start(photo("f"));
     expect(syncWithDevice(s, [], newId).state.photos.map((p) => p.id)).toEqual(["f"]);
+  });
+});
+
+describe("deletedNotice", () => {
+  it("says where deleted photos went and how much space", () => {
+    expect(deletedNotice(1, 2048, "ios")).toBe(
+      "Deleted 1 photo (2.0 KB) from your iPhone. They stay in Recently Deleted in Photos for 30 days; empty it there to get the space back now.",
+    );
+    expect(deletedNotice(3, 3 * 1024 * 1024, "android")).toBe("Deleted 3 photos (3.0 MB) from your phone.");
+    expect(deletedNotice(2, 500, "organizeit")).toBe("Removed 2 photos (500 B) from OrganizeIt.");
   });
 });

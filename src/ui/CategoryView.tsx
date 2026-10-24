@@ -3,6 +3,7 @@ import { isBannedCategoryName } from "../core/categories";
 import { formatBytes } from "../core/storage";
 import { SECTIONS, type Category, type Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
+import { AlbumDialog } from "./AlbumDialog";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoViewer } from "./PhotoViewer";
 import { Thumb, forgetImages } from "./Thumb";
@@ -15,6 +16,8 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [albuming, setAlbuming] = useState(false);
+  const [notice, setNotice] = useState("");
   const [viewing, setViewing] = useState<Photo | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState(category.name);
@@ -26,6 +29,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
     setRenaming(false);
     setNewName(category.name);
     setError("");
+    setNotice("");
   }, [category.id, category.name]);
 
   const bytes = photos.reduce((n, p) => n + p.bytes, 0);
@@ -42,6 +46,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
 
   const run = async (fn: () => Promise<unknown>) => {
     setError("");
+    setNotice("");
     try {
       await fn();
     } catch (e) {
@@ -106,6 +111,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
       </header>
 
       {error && <p className="error banner">{error}</p>}
+      {notice && <p className="banner ok" role="status">{notice}</p>}
 
       {photos.length === 0 ? (
         <div className="empty">
@@ -140,6 +146,9 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
             {selected.size} selected{selected.size ? ` · ${formatBytes(selectedBytes)}` : ""}
           </span>
           <span className="spacer" />
+          {lib.canMakeAlbums && (
+            <button disabled={!selected.size} onClick={() => setAlbuming(true)}>Album</button>
+          )}
           <button disabled={!selected.size} onClick={() => setMoving(true)}>Move</button>
           <button className="danger" disabled={!selected.size} onClick={deleteSelected}>Delete</button>
         </div>
@@ -160,6 +169,23 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
               setSelected(new Set());
               setSelecting(false);
               if (lastOnes) onGone();
+            })
+          }
+        />
+      )}
+
+      {albuming && (
+        <AlbumDialog
+          count={selected.size}
+          categoryName={category.name}
+          onClose={() => setAlbuming(false)}
+          onSave={(title) =>
+            run(async () => {
+              const { added, created } = await lib.addToAlbum([...selected], title);
+              setAlbuming(false);
+              setSelected(new Set());
+              setSelecting(false);
+              setNotice(`Added ${added} photo${added === 1 ? "" : "s"} to ${created ? "new album " : ""}"${title}" in Photos.`);
             })
           }
         />

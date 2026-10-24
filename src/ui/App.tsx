@@ -279,6 +279,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
           </div>
         </div>
       )}
+      {pending.length > 0 && <BackgroundNote lib={lib} />}
     </div>
   );
 }
@@ -289,6 +290,25 @@ function timeLeft(seconds: number): string {
   if (minutes < 60) return `About ${minutes} minute${minutes === 1 ? "" : "s"} left`;
   const hours = Math.round(minutes / 6) / 10;
   return `About ${hours} hour${hours === 1 ? "" : "s"} left`;
+}
+
+/** Whether sorting will carry on once the app is closed, and what it last did. */
+function BackgroundNote({ lib }: { lib: Library }) {
+  const b = lib.background;
+  if (!lib.native || !b) return null;
+  const when = b.lastAt ? new Date(b.lastAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  return (
+    <p className="muted small">
+      {b.backgroundRefresh !== "on"
+        ? /android/i.test(navigator.userAgent)
+          ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
+          : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
+        : b.keepsGoingAfterClose
+          ? "You can close the app; sorting keeps going in the background."
+          : "Sorting pauses about 30 seconds after you close the app (iOS 26 lets it keep going), and catches up when iOS gives it time."}
+      {b.last && ` Last: ${b.last}${when ? ` (${when})` : ""}`}
+    </p>
+  );
 }
 
 function PasscodeForm({ lib }: { lib: Library }) {

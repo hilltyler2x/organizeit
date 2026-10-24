@@ -3,7 +3,7 @@ import Foundation
 import Photos
 import UIKit
 
-/// Gives OrganizeIt read and delete access to the iOS Photos library. Photos are read in
+/// Gives OrganizeIt read, delete and album access to the iOS Photos library. Photos are read in
 /// place; nothing is copied out except small JPEG previews requested by the app.
 @objc(PhotoLibraryPlugin)
 public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -15,7 +15,8 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "list", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getImage", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise)
     ]
 
     private func statusName(_ status: PHAuthorizationStatus) -> String {
@@ -107,6 +108,37 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin {
             PHAssetChangeRequest.deleteAssets(assets)
         }) { success, _ in
             call.resolve(["deleted": success])
+        }
+    }
+
+    /// Adds photos to the Photos album named `title`, creating it if needed. Albums only
+    /// point at the originals, so this takes no extra storage. Photos already in the album
+    /// are skipped by iOS.
+    @objc func addToAlbum(_ call: CAPPluginCall) {
+        let ids = call.getArray("ids", String.self) ?? []
+        let title = (call.getString("title") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { return call.reject("Missing album name") }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        if assets.count == 0 { return call.reject("Those photos are no longer on this phone", "NOT_FOUND") }
+
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localizedTitle = %@", title)
+        let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: options).firstObject
+
+        PHPhotoLibrary.shared().performChanges({
+            let request: PHAssetCollectionChangeRequest?
+            if let album = existing {
+                request = PHAssetCollectionChangeRequest(for: album)
+            } else {
+                request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+            }
+            request?.addAssets(assets)
+        }) { success, error in
+            if success {
+                call.resolve(["added": assets.count, "title": title, "created": existing == nil])
+            } else {
+                call.reject(error?.localizedDescription ?? "Could not add photos to the album")
+            }
         }
     }
 }

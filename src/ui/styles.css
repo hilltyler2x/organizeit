@@ -73,6 +73,7 @@ input {
 .small { font-size: 0.85rem; }
 .error { color: var(--danger); }
 .banner { background: color-mix(in srgb, var(--danger) 10%, transparent); padding: 10px 14px; border-radius: 10px; margin: 0 0 16px; }
+.banner.ok { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .eyebrow { text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }

@@ -13,11 +13,11 @@ import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import type { Lesson, Photo, Section } from "../core/types";
 import { API, ApiError, classifyBatch, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
-import { BackgroundSort } from "./backgroundSort";
+import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
-import { PhotoLibrary, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
+import { PhotoLibrary, canMakeAlbums, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
 import type { PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
@@ -38,6 +38,7 @@ export function useLibrary() {
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
+  const [background, setBackground] = useState<BackgroundSortStatus | null>(null);
   const stateRef = useRef(state);
   const lessonsRef = useRef<Lesson[]>([]);
   const [lessonCount, setLessonCount] = useState(0);
@@ -269,6 +270,7 @@ export function useLibrary() {
       const { results } = await BackgroundSort.takeResults().catch(() => ({ results: [] }));
       if (results.length) await commit(applyBackgroundResults(stateRef.current, results, newId));
       scanned.current = true;
+      BackgroundSort.status().then(setBackground, () => setBackground(null));
     } finally {
       setScan(null);
       scanning.current = false;
@@ -336,6 +338,16 @@ export function useLibrary() {
     return true;
   }, [commit]);
 
+  /** Puts photos from the phone's library into a Photos album (iPhone app only). */
+  const addToAlbum = useCallback(async (ids: string[], title: string) => {
+    const idSet = new Set(ids);
+    const assetIds = stateRef.current.photos
+      .filter((p) => idSet.has(p.id) && p.source.kind === "native")
+      .map((p) => (p.source as { assetId: string }).assetId);
+    if (!assetIds.length) throw new Error("Only photos from your phone's library can go into an album.");
+    return PhotoLibrary.addToAlbum({ ids: assetIds, title });
+  }, []);
+
   const importPhotos = useCallback(async (picked: PickedPhoto[]) => {
     for (const item of picked) {
       try {
@@ -391,11 +403,13 @@ export function useLibrary() {
     aiProblem,
     locked,
     native: isNativeApp,
+    canMakeAlbums,
     permission,
     scan,
     /** Photos per second lately, or null until there is enough to estimate. */
     sortRate,
     sortedThisRun,
+    background,
     connectLibrary,
     openSettings: () => PhotoLibrary.openSettings(),
     unlock: async (code: string) => {
@@ -408,6 +422,7 @@ export function useLibrary() {
     move,
     lessonCount,
     remove,
+    addToAlbum,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };
 }

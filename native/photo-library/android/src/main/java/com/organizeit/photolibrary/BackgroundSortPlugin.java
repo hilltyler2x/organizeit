@@ -1,5 +1,9 @@
 package com.organizeit.photolibrary;
 
+import android.app.ActivityManager;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Build;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -49,6 +53,26 @@ public class BackgroundSortPlugin extends Plugin {
             ret.put("results", new JSArray(results.toString()));
         } catch (Exception e) {
             ret.put("results", new JSArray());
+        }
+        call.resolve(ret);
+    }
+
+    /** What the app shows about background sorting on this phone. */
+    @PluginMethod
+    public void status(PluginCall call) {
+        JSObject ret = new JSObject();
+        boolean restricted = false;
+        if (Build.VERSION.SDK_INT >= 28) {
+            ActivityManager am = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            restricted = am != null && am.isBackgroundRestricted();
+        }
+        ret.put("backgroundRefresh", restricted ? "off" : "on");
+        ret.put("keepsGoingAfterClose", true);
+        SharedPreferences prefs = getContext().getSharedPreferences("organizeit-background", Context.MODE_PRIVATE);
+        String last = prefs.getString("last", null);
+        if (last != null) {
+            ret.put("last", last);
+            ret.put("lastAt", prefs.getLong("lastAt", 0));
         }
         call.resolve(ret);
     }

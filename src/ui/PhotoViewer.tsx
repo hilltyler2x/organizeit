@@ -5,7 +5,7 @@ import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
 import { forgetImages, useImageUrl } from "./Thumb";
 
-export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Category; onClose: () => void; onEmptied: () => void }) {
+export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Category; onClose: () => void; onEmptied: (deleted?: string) => void }) {
   const { lib, photo } = props;
   const url = useImageUrl(photo, "full");
   const [moving, setMoving] = useState(false);
@@ -31,10 +31,17 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
             <button
               className="danger"
               onClick={async () => {
+                // In the app the phone shows its own delete confirmation.
                 if (!lib.native && !confirm("Delete this photo from OrganizeIt?")) return;
-                if (!(await lib.remove([photo.id]))) return;
-                forgetImages([photo.id]);
-                props.onEmptied();
+                setError("");
+                try {
+                  const deleted = await lib.remove([photo.id]);
+                  if (!deleted) return;
+                  forgetImages([photo.id]);
+                  props.onEmptied(deleted);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
               }}
             >
               Delete

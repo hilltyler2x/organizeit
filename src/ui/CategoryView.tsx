@@ -60,10 +60,12 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
     if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(selectedBytes)}) from OrganizeIt?`)) return;
     run(async () => {
       const lastOnes = ids.length === photos.length && !category.seeded;
-      if (!(await lib.remove(ids))) return;
+      const deleted = await lib.remove(ids);
+      if (!deleted) return;
       forgetImages(ids);
       setSelected(new Set());
       setSelecting(false);
+      setNotice(deleted);
       if (lastOnes) onGone();
     });
   };
@@ -197,8 +199,9 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
           photo={viewing}
           category={category}
           onClose={() => setViewing(null)}
-          onEmptied={() => {
+          onEmptied={(deleted) => {
             setViewing(null);
+            if (deleted) setNotice(deleted);
             if (photos.length === 1 && !category.seeded) onGone();
           }}
         />

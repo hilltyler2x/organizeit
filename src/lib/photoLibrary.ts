@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import type { DeviceAsset } from "../core/library";
+import type { DeleteTarget } from "../core/storage";
 
 // Bridge to the native photo library plugin in native/photo-library (iOS PhotoKit,
 // Android MediaStore). Only available inside the iOS/Android app.
@@ -23,6 +24,9 @@ export const isNativeApp = Capacitor.isNativePlatform();
 
 /** Whether photos can be put into a Photos album (the iPhone app only, for now). */
 export const canMakeAlbums = Capacitor.getPlatform() === "ios";
+
+/** Where photos from the phone's library go when deleted. */
+export const deviceDeleteTarget: DeleteTarget = Capacitor.getPlatform() === "android" ? "android" : "ios";
 
 /** Reads the metadata of every photo on the device, in pages. */
 export async function listAllAssets(onProgress?: (done: number, total: number) => void): Promise<DeviceAsset[]> {

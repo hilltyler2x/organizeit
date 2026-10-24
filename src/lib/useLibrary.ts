@@ -11,13 +11,14 @@ import {
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
+import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
 import { API, ApiError, classify, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
-import { PhotoLibrary, canMakeAlbums, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
+import { PhotoLibrary, canMakeAlbums, deviceDeleteTarget, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
 import type { PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
@@ -254,19 +255,21 @@ export function useLibrary() {
 
   /**
    * Deletes photos. Photos from the phone's library are deleted from the phone too (the
-   * system asks to confirm); returns false if the person cancels.
+   * system asks to confirm). Returns the note to show, or null if the person cancels.
    */
   const remove = useCallback(async (ids: string[]) => {
     const idSet = new Set(ids);
-    const assetIds = stateRef.current.photos
-      .filter((p) => idSet.has(p.id) && p.source.kind === "native")
+    const chosen = stateRef.current.photos.filter((p) => idSet.has(p.id));
+    const assetIds = chosen
+      .filter((p) => p.source.kind === "native")
       .map((p) => (p.source as { assetId: string }).assetId);
     if (assetIds.length) {
       const { deleted } = await PhotoLibrary.deleteAssets({ ids: assetIds });
-      if (!deleted) return false;
+      if (!deleted) return null;
     }
     await commit(removePhotos(stateRef.current, ids));
-    return true;
+    const target = assetIds.length ? deviceDeleteTarget : "organizeit";
+    return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target);
   }, [commit]);
 
   /** Puts photos from the phone's library into a Photos album (iPhone app only). */

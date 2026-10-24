@@ -17,6 +17,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
   // Photos the move dialog is open for: one tapped photo, or the selection.
   const [moving, setMoving] = useState<Photo[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   // Drop selections for photos that have left the list.
   useEffect(() => {
@@ -50,6 +51,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
 
   const run = async (fn: () => Promise<unknown>) => {
     setError("");
+    setNotice("");
     try {
       await fn();
     } catch (e) {
@@ -67,9 +69,11 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     const bytes = chosen.reduce((n, p) => n + p.bytes, 0);
     if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(bytes)}) from OrganizeIt?`)) return;
     run(async () => {
-      if (!(await lib.remove(ids))) return;
+      const deleted = await lib.remove(ids);
+      if (!deleted) return;
       forgetImages(ids);
       clearSelection();
+      setNotice(deleted);
     });
   };
 
@@ -85,6 +89,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     return (
       <section className="review-view">
         <div className="empty">
+          {notice && <p className="banner ok" role="status">{notice}</p>}
           <h1>All caught up</h1>
           <p className="muted">Every photo is in a category. If OrganizeIt isn't sure about a new one, it will show up here.</p>
           <button className="primary" onClick={onDone}>Back to overview</button>
@@ -108,6 +113,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
       </header>
 
       {error && <p className="error banner">{error}</p>}
+      {notice && <p className="banner ok" role="status">{notice}</p>}
 
       {guesses.length > 0 && (
         <div className="guess-groups">

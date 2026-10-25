@@ -149,8 +149,8 @@ both native projects.
   registered and have an app record in App Store Connect. Builds appear in the TestFlight
   app for internal testers after Apple finishes processing (usually 10 to 30 minutes).
 
-`.env.app` sets `VITE_SORT_LIMIT` so test builds only sort the newest photos (remove it to
-sort the whole library).
+The app sorts the whole library. For a test build that only sorts the newest photos, add
+`VITE_SORT_LIMIT=500` (or any number) to `.env.app`.
 
 ## Limits of the web version
 

@@ -137,8 +137,11 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
       )}
       {lib.native && lib.permission === "limited" && (
         <div className="queue-row limited">
-          <span>OrganizeIt can only see the photos you selected. Allow full access to sort your whole library.</span>
-          <button onClick={lib.openSettings}>Open Settings</button>
+          <span>
+            OrganizeIt can only see the photos you picked, not your whole library. Allow full access so every photo gets sorted.
+            {lib.canMakeAlbums && " In Settings, tap Photos, then Full Access."}
+          </span>
+          <button className="primary" onClick={lib.allowFullAccess}>Allow full access</button>
         </div>
       )}
       {lib.photos.length === 0 && lib.native ? (

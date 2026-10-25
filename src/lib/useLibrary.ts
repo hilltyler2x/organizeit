@@ -370,6 +370,19 @@ export function useLibrary() {
     else if (status === "denied") await PhotoLibrary.openSettings();
   }, [scanDevice]);
 
+  // With "Limited" (iPhone) or "Selected photos" (Android 14+) access the app only sees part of
+  // the library. Android shows its permission dialog again, with "Allow all"; iPhone only lets
+  // the person change it in Settings. Either way the library is read again once they come back.
+  const allowFullAccess = useCallback(async () => {
+    if (deviceDeleteTarget === "android") {
+      const { status } = await PhotoLibrary.requestPermission();
+      setPermission(status);
+      if (status === "granted" || status === "limited") await scanDevice();
+      if (status === "granted") return;
+    }
+    await PhotoLibrary.openSettings();
+  }, [scanDevice]);
+
   /**
    * Deletes photos. Photos from the phone's library are deleted from the phone too (the
    * system asks to confirm). Returns the note to show, or null if the person cancels.
@@ -471,6 +484,7 @@ export function useLibrary() {
     background,
     connectLibrary,
     openSettings: () => PhotoLibrary.openSettings(),
+    allowFullAccess,
     unlock: async (code: string) => {
       const ok = await unlock(code);
       if (ok) setLocked(false);

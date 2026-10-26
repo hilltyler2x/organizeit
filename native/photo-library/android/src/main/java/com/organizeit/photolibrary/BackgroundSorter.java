@@ -6,7 +6,9 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.os.BatteryManager;
 import android.os.Build;
+import android.os.PowerManager;
 import android.provider.MediaStore;
 import android.util.Base64;
 import androidx.core.content.ContextCompat;
@@ -44,7 +46,35 @@ final class BackgroundSorter {
         /** Can't sort right now: no photo access, wrong passcode, no AI key, or the server stayed unreachable. */
         BLOCKED,
         /** Another run is already sorting. */
-        BUSY
+        BUSY,
+        /** Stopped to save battery; carries on once the phone charges. */
+        PAUSED
+    }
+
+    /** What the battery allows background sorting to do right now. */
+    static final class Power {
+
+        /** Most photos a background run sorts on battery; the rest wait for the phone to charge. */
+        static final int BATTERY_LIMIT = 100;
+
+        final boolean charging;
+        /** 0-100, or -1 when Android doesn't say. */
+        final int level;
+        final boolean saver;
+
+        Power(Context context) {
+            BatteryManager battery = (BatteryManager) context.getSystemService(Context.BATTERY_SERVICE);
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            charging = battery != null && battery.isCharging();
+            int capacity = battery == null ? Integer.MIN_VALUE : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            level = capacity == Integer.MIN_VALUE ? -1 : capacity;
+            saver = pm != null && pm.isPowerSaveMode();
+        }
+
+        /** Battery Saver, or under 20%, and not plugged in: background sorting waits. */
+        boolean shouldPause() {
+            return !charging && (saver || (level >= 0 && level < 20));
+        }
     }
 
     interface StopCheck {
@@ -127,6 +157,7 @@ final class BackgroundSorter {
         if (!running.compareAndSet(false, true)) return Outcome.BUSY;
         ExecutorService pool = Executors.newFixedThreadPool(BATCH);
         int sorted = 0;
+        String ending = null;
         try {
             if (!hasPhotoAccess(context)) {
                 note(context, "Stopped: OrganizeIt doesn't have access to Photos.");
@@ -140,6 +171,15 @@ final class BackgroundSorter {
             long pause = 0;
             long waitedSince = 0;
             while (!stop.shouldStop()) {
+                Power power = new Power(context);
+                if (power.shouldPause()) {
+                    ending = "Paused to save battery (" + (power.saver ? "Battery Saver" : "under 20%") + "). Sorting carries on when the phone charges or you open OrganizeIt.";
+                    return Outcome.PAUSED;
+                }
+                if (!power.charging && sorted >= Power.BATTERY_LIMIT) {
+                    ending = "The rest will be sorted while the phone charges, or when you open OrganizeIt.";
+                    return Outcome.PAUSED;
+                }
                 // Re-read each round: the app may have sent a newer snapshot.
                 JSONObject config = store.config();
                 if (config == null) return Outcome.BLOCKED;
@@ -184,17 +224,19 @@ final class BackgroundSorter {
                     }
                 }
                 if (problem == Answer.PERMANENT) {
-                    note(context, "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.");
+                    ending = "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.";
                     return Outcome.BLOCKED;
                 }
                 if (problem != null) {
                     // Give the server (which can take a minute to wake) or the network time to come back.
+                    // On battery, a few minutes of waiting with the radio on is all it's worth.
                     long now = System.currentTimeMillis();
                     if (waitedSince == 0) waitedSince = now;
-                    if (now - waitedSince > 15 * 60_000L) {
-                        note(context, problem == Answer.OFFLINE
-                            ? "Stopped: couldn't reach the sorting server for 15 minutes."
-                            : "Stopped: the sorting server stayed busy for 15 minutes.");
+                    int minutes = power.charging ? 15 : 3;
+                    if (now - waitedSince > minutes * 60_000L) {
+                        ending = problem == Answer.OFFLINE
+                            ? "Stopped: couldn't reach the sorting server for " + minutes + " minutes."
+                            : "Stopped: the sorting server stayed busy for " + minutes + " minutes.";
                         return Outcome.BLOCKED;
                     }
                     pause = Math.min(Math.max(pause * 2, 5), 60);
@@ -210,7 +252,8 @@ final class BackgroundSorter {
         } finally {
             pool.shutdownNow();
             running.set(false);
-            if (sorted > 0) note(context, "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background.");
+            String done = sorted > 0 ? "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background." : null;
+            if (done != null || ending != null) note(context, done == null ? ending : ending == null ? done : done + " " + ending);
         }
     }
 

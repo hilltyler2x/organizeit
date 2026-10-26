@@ -317,7 +317,7 @@ function BackgroundNote({ lib }: { lib: Library }) {
           ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
           : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
         : b.keepsGoingAfterClose
-          ? "You can close the app; sorting keeps going in the background."
+          ? "You can close the app; sorting keeps going in the background (up to 100 photos on battery, the rest while charging)."
           : "Sorting pauses about 30 seconds after you close the app (iOS 26 lets it keep going), and catches up when iOS gives it time."}
       {b.last && ` Last: ${b.last}${when ? ` (${when})` : ""}`}
     </p>

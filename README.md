@@ -110,7 +110,7 @@ was unsure about still go to To review and the core rule still holds.
   while the app is open. Close the app and sorting carries on, with progress shown by iOS,
   which can be stopped from there. While the app is open it sorts by itself and the task only
   follows along. Once everything is sorted it keeps watching for new photos for 5 more
-  minutes before ending.
+  minutes before ending (only while charging).
 - **Any iPhone:** about 30 seconds of extra time right after closing, plus background refresh
   and processing tasks that iOS runs when it chooses (often overnight while charging) to sort
   photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
@@ -119,6 +119,14 @@ was unsure about still go to To review and the core rule still holds.
 - **Android:** a "Sorting photos" notification (a foreground service) keeps sorting after
   the app is closed; new photos are sorted a few seconds after they are added, and hourly
   as a fallback (Android may delay these to save battery).
+
+- **Saving battery (both phones):** on battery, a background run sorts at most 100 photos,
+  gives up on an unreachable server after 3 minutes (15 while charging), and on iPhone
+  doesn't download photos kept only in iCloud. In Low Power Mode / Battery Saver, or under
+  20% and not plugged in, it doesn't sort at all. The big catch-up (iOS processing task,
+  Android hourly job) only runs while charging, the iOS refresh asks for about one wake-up an
+  hour, and the 5-minute watch after finishing only happens while charging. Opening the app
+  always sorts everything, as before.
 
 `npm run build:app` builds the web code against the API in `.env.app` and syncs it into
 both native projects.

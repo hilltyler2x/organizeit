@@ -61,8 +61,9 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
   moves a subscription to a new phone.
 - The passcode still sorts without a subscription (the website, and the owner via
   "Have a passcode?" on the subscribe screen). After 10 wrong passcodes in an hour an address
-  is shut out for the rest of the hour. `OWNER_PHONE_IDS` (comma-separated; each phone's id
-  shows under the passcode box) limits the passcode to those phones.
+  is shut out for the rest of the hour. Each passcode belongs to the first phone that unlocks
+  with it and works nowhere else (the claim is kept, hashed, in the `passcode_owners` table).
+  For another phone, add another passcode to `APP_PASSCODE`, comma-separated.
 
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
 

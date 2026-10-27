@@ -129,26 +129,32 @@ export function memoryUsage(): UsageStore {
   };
 }
 
-/** Counts kept in Postgres, so they survive restarts and are shared by every server instance. */
-export async function postgresUsage(url: string): Promise<UsageStore> {
+/**
+ * Opens the database: encrypted when it offers that (external URLs require it; Render's
+ * internal ones may not), plain otherwise.
+ */
+export async function connectPostgres(url: string) {
   const { default: pg } = await import("pg");
-  const setUp = async (ssl: boolean) => {
+  const open = async (ssl: boolean) => {
     const pool = new pg.Pool({ connectionString: url, max: 5, ssl: ssl ? { rejectUnauthorized: false } : undefined });
     try {
-      await pool.query(`CREATE TABLE IF NOT EXISTS sort_usage (
-        key text PRIMARY KEY,
-        count integer NOT NULL,
-        updated_at timestamptz NOT NULL DEFAULT now()
-      )`);
+      await pool.query("SELECT 1");
       return pool;
     } catch (err) {
       await pool.end().catch(() => undefined);
       throw err;
     }
   };
-  // Encrypted when the database offers it (external URLs require it; Render's internal ones
-  // may not), plain otherwise.
-  const pool = await setUp(true).catch(() => setUp(false));
+  return open(true).catch(() => open(false));
+}
+
+/** Counts kept in Postgres, so they survive restarts and are shared by every server instance. */
+export async function postgresUsage(pool: import("pg").Pool): Promise<UsageStore> {
+  await pool.query(`CREATE TABLE IF NOT EXISTS sort_usage (
+    key text PRIMARY KEY,
+    count integer NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+  )`);
   return {
     async add(key, n, limit) {
       if (n > limit) return null;

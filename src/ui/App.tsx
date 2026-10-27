@@ -4,6 +4,7 @@ import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
 import { API } from "../lib/api";
+import { canRate, rateApp } from "../lib/appReview";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
@@ -110,6 +111,13 @@ export function App() {
               </div>
             );
           })}
+          {canRate && (
+            <div className="nav-section">
+              <button className="nav-item" onClick={() => { setMenuOpen(false); rateApp().catch(() => {}); }}>
+                <span>Rate OrganizeIt ★</span>
+              </button>
+            </div>
+          )}
         </nav>
         {menuOpen && <button className="scrim" aria-label="Close categories" onClick={() => setMenuOpen(false)} />}
 

@@ -13,6 +13,7 @@ import {
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { markNotDuplicate, setHashes } from "../core/duplicates";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
+import { SORTED_ENOUGH, freedEnough } from "../core/reviews";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
 import {
@@ -29,6 +30,7 @@ import {
   unlock,
   type Subscription,
 } from "./api";
+import { happyMoment } from "./appReview";
 import { startPurchases } from "./purchases";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
@@ -400,10 +402,14 @@ export function useLibrary() {
     }
   }, [ai, locked, paywall, userReady, classifyGroup]);
 
-  // Once the queue is empty, the next round of sorting starts its progress from zero.
+  // Once the queue is empty, the next round of sorting starts its progress from zero. A big
+  // round finishing is a good moment to ask for a review.
   const idle = !state.photos.some((p) => p.status === "queued" || p.status === "classifying");
+  const sortedRef = useRef(0);
+  sortedRef.current = sortedThisRun;
   useEffect(() => {
     if (!idle) return;
+    if (sortedRef.current >= SORTED_ENOUGH) happyMoment("sorted");
     finished.current = [];
     setSortedThisRun(0);
     setSortRate(null);
@@ -534,9 +540,11 @@ export function useLibrary() {
       if (!deleted) return null;
     }
     await commit(removePhotos(stateRef.current, ids));
+    const freed = chosen.reduce((n, p) => n + p.bytes, 0);
+    if (freedEnough(chosen.length, freed)) happyMoment("freed");
     const target = assetIds.length ? deviceDeleteTarget : "organizeit";
     const videos = chosen.filter((p) => p.isVideo).length;
-    return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target, videos);
+    return deletedNotice(chosen.length, freed, target, videos);
   }, [commit]);
 
   /** The person says photos flagged as duplicates are not copies of each other. */

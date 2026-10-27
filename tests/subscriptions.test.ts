@@ -69,6 +69,16 @@ describe("subscriptions", () => {
     expect((await call(app, "POST", "/api/classify-batch", user("new-phone-2"), batch(8))).status).toBe(200);
   });
 
+  it("accepts only the exact passcode, and stops guessing after 10 wrong tries", async () => {
+    const app = createApp(client, { passcode: "1100", subscriptions: subs({}) });
+    expect((await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": "1101" })).status).toBe(401);
+    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "a", ...user("guesser-1") }, single)).status).toBe(402);
+    for (let i = 0; i < 8; i++) await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": String(2000 + i) });
+    const blocked = await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": "1100" });
+    expect(blocked.status).toBe(429);
+    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100" }, single)).status).toBe(429);
+  });
+
   it("still lets the passcode sort without a subscription", async () => {
     const app = createApp(client, { passcode: "s3cret", subscriptions: subs({}) });
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "s3cret" }, single)).status).toBe(200);

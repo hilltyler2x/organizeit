@@ -299,9 +299,11 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
       )}
       {pending.length > 0 && (
         <div className="queue-row sorting">
-          <span className={lib.server === "ok" && !lib.locked ? "spinner" : ""} aria-hidden />
+          <span className={lib.server === "ok" && !lib.locked && !lib.paywall ? "spinner" : ""} aria-hidden />
           <span>
-            <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
+            <strong>
+              {lib.paywall ? "Waiting to sort" : "Sorting"} {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}{lib.paywall ? "" : "…"}
+            </strong>
             {lib.sortRate && <span className="muted small"> {timeLeft(pending.length / lib.sortRate)}</span>}
             <PlanNote lib={lib} />
           </span>

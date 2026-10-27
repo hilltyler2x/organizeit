@@ -3,10 +3,17 @@ import { z } from "zod";
 import { isBannedCategoryName, pickCategoryName } from "../src/core/categories";
 import type { Classification, Section } from "../src/core/types";
 
-// The model can be switched on the server (CLASSIFY_MODEL) without a new app build.
-export const MODEL = process.env.CLASSIFY_MODEL || "claude-opus-5-5";
+// Two passes keep the AI bill low: every photo goes to a fast, cheap model first, and only the
+// ones it isn't sure about (or can't place) are asked again of the most capable model. Both can
+// be switched on the server without a new app build; CLASSIFY_ESCALATE_MODEL=none turns the
+// second pass off.
+export const MODEL = process.env.CLASSIFY_MODEL || "claude-haiku-5-5";
+const escalateSetting = process.env.CLASSIFY_ESCALATE_MODEL ?? "claude-opus-5-5";
+export const ESCALATE_MODEL = escalateSetting && escalateSetting !== "none" && escalateSetting !== MODEL ? escalateSetting : null;
+/** First-pass answers below this confidence go to the second model. */
+export const ESCALATE_BELOW = Number(process.env.CLASSIFY_ESCALATE_BELOW ?? 0.75);
 // Haiku has no server-side refusal fallback; the other current models do.
-const FALLBACKS = !MODEL.startsWith("claude-haiku");
+const hasFallbacks = (model: string) => !model.startsWith("claude-haiku");
 
 // Up to this many photos go to the AI in one request. One request per photo spends most of
 // its time on per-request overhead, so batches sort several times faster.
@@ -141,11 +148,11 @@ export class ClassifyError extends Error {
 
 type Messages = Anthropic.Beta.Messages.BetaMessageParam[];
 
-async function request(client: Anthropic, messages: Messages, schema: { [key: string]: unknown }, maxTokens: number) {
+async function request(client: Anthropic, model: string, messages: Messages, schema: { [key: string]: unknown }, maxTokens: number) {
   const response = await client.beta.messages.create({
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
-    ...(FALLBACKS ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
+    ...(hasFallbacks(model) ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     system: SYSTEM,
     output_config: { effort: "low", format: { type: "json_schema", schema } },
     messages,
@@ -162,8 +169,8 @@ async function request(client: Anthropic, messages: Messages, schema: { [key: st
   return { json, raw: response };
 }
 
-async function ask(client: Anthropic, messages: Messages): Promise<{ answer: z.infer<typeof ModelAnswer>; raw: Anthropic.Beta.Messages.BetaMessage }> {
-  const { json, raw } = await request(client, messages, OUTPUT_SCHEMA, 4000);
+async function ask(client: Anthropic, model: string, messages: Messages): Promise<{ answer: z.infer<typeof ModelAnswer>; raw: Anthropic.Beta.Messages.BetaMessage }> {
+  const { json, raw } = await request(client, model, messages, OUTPUT_SCHEMA, 4000);
   const parsed = ModelAnswer.safeParse(json);
   if (!parsed.success) throw new ClassifyError("The AI returned an answer in the wrong shape.", 502);
   return { answer: parsed.data, raw };
@@ -179,6 +186,12 @@ function toClassification(answer: z.infer<typeof ModelAnswer>, category: string)
 }
 
 export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Promise<Classification> {
+  const [result] = await classifyBatch(client, { photos: [req], categories: req.categories, lessons: req.lessons });
+  if ("error" in result) throw new ClassifyError(result.error, 422);
+  return result;
+}
+
+async function classifyOne(client: Anthropic, model: string, req: ClassifyRequest): Promise<Classification> {
   const messages: Messages = [
     {
       role: "user",
@@ -192,7 +205,7 @@ export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Pr
     },
   ];
 
-  let { answer, raw } = await ask(client, messages);
+  let { answer, raw } = await ask(client, model, messages);
   let name = pickCategoryName(answer.category, answer.label);
 
   if (!name) {
@@ -202,7 +215,7 @@ export async function classifyPhoto(client: Anthropic, req: ClassifyRequest): Pr
       role: "user",
       content: `"${answer.category}" is a catch-all, which is not allowed. Name the specific kind of item or document in the photo as a new plural category.`,
     });
-    ({ answer, raw } = await ask(client, messages));
+    ({ answer, raw } = await ask(client, model, messages));
     name = pickCategoryName(answer.category, answer.label);
   }
   if (!name) throw new ClassifyError("Could not find a specific category for this photo.", 422);
@@ -217,8 +230,25 @@ export type BatchResult = Classification | { error: string };
  * usual corrective retry), so the no-catch-all rule holds exactly as for a single photo.
  */
 export async function classifyBatch(client: Anthropic, req: ClassifyBatchRequest): Promise<BatchResult[]> {
+  const first = await classifyWith(client, MODEL, req);
+  if (!ESCALATE_MODEL) return first;
+  const unsure = req.photos.flatMap((_, i) => {
+    const r = first[i];
+    return "error" in r || r.confidence < ESCALATE_BELOW ? [i] : [];
+  });
+  if (!unsure.length) return first;
+  const second = await classifyWith(client, ESCALATE_MODEL, { ...req, photos: unsure.map((i) => req.photos[i]) });
+  const results = [...first];
+  // The second model's answer wins, unless it couldn't place the photo and the first could.
+  unsure.forEach((i, j) => {
+    if (!("error" in second[j]) || "error" in first[i]) results[i] = second[j];
+  });
+  return results;
+}
+
+async function classifyWith(client: Anthropic, model: string, req: ClassifyBatchRequest): Promise<BatchResult[]> {
   const single = (photo: PhotoInput) =>
-    classifyPhoto(client, { ...photo, categories: req.categories, lessons: req.lessons }).catch((err): BatchResult => {
+    classifyOne(client, model, { ...photo, categories: req.categories, lessons: req.lessons }).catch((err): BatchResult => {
       if (err instanceof ClassifyError) return { error: err.message };
       throw err;
     });
@@ -238,7 +268,7 @@ export async function classifyBatch(client: Anthropic, req: ClassifyBatchRequest
 
   const answers = new Map<number, z.infer<typeof ModelAnswer>>();
   try {
-    const { json } = await request(client, [{ role: "user", content }], BATCH_SCHEMA, 2000 + 400 * req.photos.length);
+    const { json } = await request(client, model, [{ role: "user", content }], BATCH_SCHEMA, 2000 + 400 * req.photos.length);
     const items = (json as { photos?: unknown })?.photos;
     if (Array.isArray(items)) {
       for (const item of items) {

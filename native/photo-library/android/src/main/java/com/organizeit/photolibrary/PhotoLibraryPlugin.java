@@ -148,6 +148,19 @@ public class PhotoLibraryPlugin extends Plugin {
     }
 
     /**
+     * An id for this phone that stays the same when OrganizeIt is uninstalled and installed
+     * again (Android keeps it per app signing key), so the free photos and the subscription
+     * follow the phone rather than the install.
+     */
+    @PluginMethod
+    public void deviceId(PluginCall call) {
+        String id = Settings.Secure.getString(getContext().getContentResolver(), Settings.Secure.ANDROID_ID);
+        JSObject ret = new JSObject();
+        ret.put("id", id == null || id.isEmpty() ? "" : "android-" + id);
+        call.resolve(ret);
+    }
+
+    /**
      * Pages through every photo, then every video, in the library, oldest first within each.
      * The app sorts by date itself, so the two tables are simply read one after the other.
      */

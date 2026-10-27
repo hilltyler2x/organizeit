@@ -10,6 +10,8 @@ import type { Section } from "../core/types";
 export interface BackgroundSortConfig {
   apiUrl: string;
   passcode: string;
+  /** Who the server checks the subscription of. */
+  userId: string;
   categories: { section: Section; name: string }[];
   lessons: LessonForPrompt[];
   /** Phone photo ids waiting to be sorted, newest first. */

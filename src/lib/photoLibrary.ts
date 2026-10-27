@@ -29,6 +29,8 @@ interface PhotoLibraryPlugin {
   copyImage(options: { id: string }): Promise<void>;
   /** Opens the phone's share sheet for a photo. */
   shareImage(options: { id: string }): Promise<{ completed: boolean }>;
+  /** An id for this phone that survives deleting and reinstalling the app. Empty if unavailable. */
+  deviceId(): Promise<{ id: string }>;
 }
 
 export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");

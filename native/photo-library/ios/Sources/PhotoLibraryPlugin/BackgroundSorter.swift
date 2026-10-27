@@ -94,6 +94,8 @@ struct Classification: Codable {
 struct BackgroundSortConfig: Codable {
     var apiUrl: String
     var passcode: String
+    /// RevenueCat id the server checks the subscription of. Missing in snapshots saved by older builds.
+    var userId: String?
     var categories: [CategoryName]
     var lessons: [LessonForPrompt]
     /// Photos waiting to be sorted, newest first.
@@ -491,7 +493,7 @@ public final class BackgroundSorter {
             switch problem {
             case .permanent?:
                 lastRunSorted = sorted
-                noteRun("Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.")
+                noteRun("Stopped: the server turned the photos down (subscription, passcode or AI key). Open OrganizeIt to see why.")
                 return .blocked
             case .offline?, .retry?:
                 // Give the server (which can take a minute to wake) or the network time to come back.
@@ -546,7 +548,7 @@ public final class BackgroundSorter {
     }
 
     enum SortError: Error {
-        /// Wrong passcode or no AI key: retrying won't help.
+        /// Wrong passcode, no subscription or no AI key: retrying won't help.
         case permanent
         /// No connection, or the server is asleep or unreachable.
         case offline
@@ -589,13 +591,15 @@ public final class BackgroundSorter {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(config.passcode, forHTTPHeaderField: "x-organizeit-passcode")
+        if let userId = config.userId, !userId.isEmpty { request.setValue(userId, forHTTPHeaderField: "x-organizeit-user") }
         request.httpBody = payload
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200, let result = try? JSONDecoder().decode(Classification.self, from: data) { return .success(result) }
             switch code {
-            case 401, 503: return .failure(.permanent) // wrong passcode, or the server has no working AI key
+            // Wrong passcode, no subscription (or this month's photos used up), or no working AI key.
+            case 401, 402, 503: return .failure(.permanent)
             case 429, 500...599: return .failure(.retry)
             default: return .failure(.skip)
             }

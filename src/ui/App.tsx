@@ -3,7 +3,9 @@ import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
+import { API } from "../lib/api";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
+import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
 import { DuplicatesView } from "./DuplicatesView";
@@ -266,7 +268,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
   const waiting = needsPerson(lib.photos);
   const failed = waiting.filter((p) => p.status === "error");
   const connecting = lib.server === "checking" || lib.server === "offline";
-  if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan) return null;
+  if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan && !lib.paywall) return null;
 
   return (
     <div className="queue">
@@ -288,6 +290,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
         </div>
       )}
       {lib.locked && lib.server === "ok" && <PasscodeForm lib={lib} />}
+      {lib.paywall && lib.server === "ok" && <Paywall lib={lib} />}
       {lib.server === "no-ai" && (
         <p className="error banner">
           {lib.aiProblem ?? "The sorting server doesn't have an Anthropic API key."} Add a working ANTHROPIC_API_KEY to the
@@ -300,6 +303,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
           <span>
             <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
             {lib.sortRate && <span className="muted small"> {timeLeft(pending.length / lib.sortRate)}</span>}
+            <PlanNote lib={lib} />
           </span>
           {lib.sortedThisRun > 0 && (
             <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
@@ -357,6 +361,122 @@ function BackgroundNote({ lib }: { lib: Library }) {
           : "Sorting pauses about 30 seconds after you close the app (iOS 26 lets it keep going), and catches up when iOS gives it time."}
       {b.last && ` Last: ${b.last}${when ? ` (${when})` : ""}`}
     </p>
+  );
+}
+
+/** How much of the free preview or the first month is used, while sorting. */
+function PlanNote({ lib }: { lib: Library }) {
+  const p = lib.plan;
+  if (!lib.subscriptions || !p || lib.paywall) return null;
+  if (!p.active && p.freeLimit > 0) {
+    return <span className="muted small"> Free preview: {Math.min(p.freeUsed, p.freeLimit)} of {p.freeLimit} photos.</span>;
+  }
+  if (p.active && p.limit > 0) {
+    return <span className="muted small"> {p.intro ? "First month" : "This month"}: {p.used.toLocaleString()} of {p.limit.toLocaleString()} photos.</span>;
+  }
+  return null;
+}
+
+/** Sorting is paused until the person subscribes (or, in the $2 month, until it renews). */
+function Paywall({ lib }: { lib: Library }) {
+  const reason = lib.paywall!.reason;
+  const [offer, setOffer] = useState<Offer | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "busy" | "unavailable">("loading");
+  const [problem, setProblem] = useState<string | null>(null);
+  const [usePasscode, setUsePasscode] = useState(false);
+  const android = /android/i.test(navigator.userAgent);
+
+  useEffect(() => {
+    if (reason !== "subscribe") return;
+    monthlyOffer().then(
+      (o) => {
+        setOffer(o);
+        setState(o ? "ready" : "unavailable");
+      },
+      () => setState("unavailable"),
+    );
+  }, [reason]);
+
+  // The store has taken payment; the server hears about it from RevenueCat within moments.
+  const unlocked = async () => {
+    for (let i = 0; i < 5; i++) {
+      const p = await lib.refreshPlan(true);
+      if (p?.active) return;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    setProblem("Your purchase went through, but the server hasn't seen it yet. Close and reopen OrganizeIt in a minute.");
+  };
+
+  const run = async (action: () => Promise<boolean | void>) => {
+    setState("busy");
+    setProblem(null);
+    try {
+      if ((await action()) !== false) await unlocked();
+    } catch (err) {
+      setProblem(err instanceof Error ? err.message : "The store couldn't complete that. Try again.");
+    } finally {
+      setState(offer ? "ready" : "unavailable");
+    }
+  };
+
+  if (reason === "limit") {
+    return (
+      <div className="queue-row paywall">
+        <strong>Sorting is paused for this month.</strong>
+        <p className="muted small">{lib.paywall!.message}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="queue-row paywall">
+      <strong>Keep OrganizeIt sorting</strong>
+      <p className="muted small">{lib.paywall!.message}</p>
+      {offer && (
+        <p>
+          {offer.introPrice ? (
+            <>
+              <strong>{offer.introPrice}</strong> for your first month, then {offer.price} a month.
+            </>
+          ) : (
+            <>
+              <strong>{offer.price}</strong> a month.
+            </>
+          )}{" "}
+          New photos are sorted the moment you take them, and your whole library gets sorted.
+        </p>
+      )}
+      {state === "unavailable" && (
+        <p className="muted small">
+          {canBuy ? "The store isn't answering right now. Try again in a moment." : "Subscriptions aren't available in this version of the app yet."}
+        </p>
+      )}
+      {problem && <p className="error small">{problem}</p>}
+      <div className="row">
+        {offer && (
+          <button className="primary" disabled={state === "busy"} onClick={() => run(() => buy(offer))}>
+            {offer.introPrice ? `Start for ${offer.introPrice}` : "Subscribe"}
+          </button>
+        )}
+        {canBuy && (
+          <button disabled={state === "busy"} onClick={() => run(restore)}>Restore purchases</button>
+        )}
+      </div>
+      {offer && (
+        <p className="muted small fine-print">
+          Paid through your {android ? "Google Play" : "Apple"} account. The subscription renews each month at {offer.price} until you
+          cancel, which you can do any time in {android ? "Play Store → Payments & subscriptions → Subscriptions" : "Settings → your name → Subscriptions"},
+          at least 24 hours before it renews.{" "}
+          <a href={`${API}/terms.html`} target="_blank" rel="noreferrer">Terms</a> ·{" "}
+          <a href={`${API}/privacy.html`} target="_blank" rel="noreferrer">Privacy</a>
+        </p>
+      )}
+      {usePasscode ? (
+        <PasscodeForm lib={lib} />
+      ) : (
+        <button className="link small" onClick={() => setUsePasscode(true)}>Have a passcode?</button>
+      )}
+    </div>
   );
 }
 

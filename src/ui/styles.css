@@ -144,6 +144,9 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
 .progress > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
 .queue-row.passcode { flex-direction: column; align-items: stretch; margin-bottom: 10px; }
 .queue-row.passcode p { margin: 0; }
+.queue-row.paywall { flex-direction: column; align-items: stretch; margin-bottom: 10px; }
+.queue-row.paywall p { margin: 0; }
+.queue-row.paywall .fine-print a { color: inherit; }
 .queue-failed { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; margin-top: 10px; }
 .queue-failed p { margin-top: 0; }
 .spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }

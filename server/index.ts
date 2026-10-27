@@ -26,11 +26,51 @@ function sameSecret(a: string, b: string) {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
+const MAX_WRONG_PASSCODES = 10;
+const TOO_MANY_WRONG = "Too many wrong passcodes. Try again in an hour.";
+
+/**
+ * Checks the passcode a request carries. After MAX_WRONG_PASSCODES wrong tries in an hour an
+ * address is shut out for the rest of that hour, even with the right one, so a short passcode
+ * can't be found by trying them all.
+ */
+function passcodeChecker(passcode: string | undefined, ownerPhones: string[] = []) {
+  const wrong = new Map<string, { start: number; count: number }>();
+  return (req: Parameters<RequestHandler>[0]): "none" | "ok" | "wrong" | "blocked" => {
+    const given = String(req.get("x-organizeit-passcode") ?? "");
+    if (!passcode || !given) return "none";
+    const key = req.ip ?? "unknown";
+    const now = Date.now();
+    let w = wrong.get(key);
+    if (w && now - w.start > 3_600_000) wrong.delete(key), (w = undefined);
+    if (w && w.count >= MAX_WRONG_PASSCODES) return "blocked";
+    if (sameSecret(given, passcode)) {
+      // With OWNER_PHONE_IDS set, the passcode only works from those phones.
+      const phone = String(req.get("x-organizeit-user") ?? "");
+      if (!ownerPhones.length || ownerPhones.includes(phone)) return "ok";
+      console.log(`Right passcode from a phone not in OWNER_PHONE_IDS: ${phone || "(the website)"}`);
+    }
+    if (!w) {
+      if (wrong.size > 100_000) wrong.clear();
+      wrong.set(key, (w = { start: now, count: 0 }));
+    }
+    w.count++;
+    return "wrong";
+  };
+}
+type PasscodeCheck = ReturnType<typeof passcodeChecker>;
+
 // When APP_PASSCODE is set (always, for a public deployment), only people with the
 // passcode can spend the server's Anthropic credits.
-function requirePasscode(passcode: string | undefined): RequestHandler {
+function requirePasscode(passcode: string | undefined, check: PasscodeCheck): RequestHandler {
   return (req, res, next) => {
-    if (!passcode || sameSecret(String(req.get("x-organizeit-passcode") ?? ""), passcode)) return next();
+    if (!passcode) return next();
+    const result = check(req);
+    if (result === "ok") return next();
+    if (result === "blocked") {
+      res.status(429).json({ error: TOO_MANY_WRONG });
+      return;
+    }
     res.status(401).json({ error: "Enter the OrganizeIt passcode to sort photos." });
   };
 }
@@ -38,7 +78,7 @@ function requirePasscode(passcode: string | undefined): RequestHandler {
 // Who may sort. The passcode always works (the owner, and the website). With subscriptions on,
 // a phone without it needs an active subscription, and each billing period has an allowance:
 // the request is charged for its photos up front and turned down with 402 once it is used up.
-function requireAccess(passcode: string | undefined, subs: SubscriptionOptions | undefined): RequestHandler {
+function requireAccess(passcode: string | undefined, subs: SubscriptionOptions | undefined, check: PasscodeCheck): RequestHandler {
   // Free photos are handed out per phone id, which a script could make up. A per-IP daily
   // ceiling keeps that from adding up to much.
   const freeByIp = new Map<string, { day: number; count: number }>();
@@ -55,7 +95,12 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
     return true;
   };
   return async (req, res, next) => {
-    if (passcode && sameSecret(String(req.get("x-organizeit-passcode") ?? ""), passcode)) return next();
+    const given = check(req);
+    if (given === "ok") return next();
+    if (given === "blocked") {
+      res.status(429).json({ error: TOO_MANY_WRONG });
+      return;
+    }
     if (!subs) {
       if (!passcode) return next();
       res.status(401).json({ error: "Enter the OrganizeIt passcode to sort photos." });
@@ -145,15 +190,16 @@ const allowApp: RequestHandler = (req, res, next) => {
 
 export function createApp(
   client: Anthropic | null,
-  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions } = {},
+  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions; ownerPhones?: string[] } = {},
 ) {
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
   app.use(express.json({ limit: "25mb" }));
-  const gate = requirePasscode(options.passcode || undefined);
+  const check = passcodeChecker(options.passcode || undefined, options.ownerPhones);
+  const gate = requirePasscode(options.passcode || undefined, check);
   const subs = options.subscriptions;
-  const access = requireAccess(options.passcode || undefined, subs);
+  const access = requireAccess(options.passcode || undefined, subs, check);
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, ai: client !== null, passcodeRequired: Boolean(options.passcode), subscriptions: Boolean(subs) });
@@ -254,6 +300,7 @@ if (isMain) {
     : undefined;
   const app = createApp(hasKey ? new Anthropic() : null, {
     passcode: process.env.APP_PASSCODE,
+    ownerPhones: (process.env.OWNER_PHONE_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean),
     perHour: Number(process.env.SORTS_PER_HOUR ?? 10_000),
     subscriptions,
   });

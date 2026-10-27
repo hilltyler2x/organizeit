@@ -1,6 +1,7 @@
 import Capacitor
 import Foundation
 import Photos
+import Security
 import UIKit
 import UniformTypeIdentifiers
 
@@ -20,7 +21,8 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
         CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "copyImage", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deviceId", returnType: CAPPluginReturnPromise)
     ]
 
     /// All images and videos, kept to tell ones being added or removed apart from other library changes.
@@ -82,6 +84,32 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
             }
             call.resolve()
         }
+    }
+
+    /// An id for this phone that stays the same when OrganizeIt is deleted and installed again.
+    /// Kept in the keychain, which iOS doesn't clear on uninstall, so the free photos and the
+    /// subscription follow the phone rather than the install.
+    @objc func deviceId(_ call: CAPPluginCall) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.organizeit.device",
+            kSecAttrAccount as String: "id",
+        ]
+        var found: AnyObject?
+        var lookup = query
+        lookup[kSecReturnData as String] = true
+        if SecItemCopyMatching(lookup as CFDictionary, &found) == errSecSuccess,
+           let data = found as? Data, let id = String(data: data, encoding: .utf8), !id.isEmpty {
+            call.resolve(["id": id])
+            return
+        }
+        let id = "ios-" + UUID().uuidString.lowercased()
+        var add = query
+        add[kSecValueData as String] = Data(id.utf8)
+        // Readable while the phone is locked, for sorting in the background.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+        call.resolve(["id": id])
     }
 
     /// Pages through every photo and video in the library, oldest first.

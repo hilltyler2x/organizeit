@@ -4,6 +4,18 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClassifyBatchRequest, ClassifyError, ClassifyRequest, classifyBatch, classifyPhoto } from "./classify";
+import {
+  PlanUnavailable,
+  cached,
+  freeKey,
+  limitFor,
+  memoryUsage,
+  postgresUsage,
+  revenueCat,
+  usageKey,
+  validUserId,
+  type SubscriptionOptions,
+} from "./subscriptions";
 
 // Small API server. The Anthropic key stays here so neither the website nor a future
 // iOS/Android build ever ships it.
@@ -23,11 +35,83 @@ function requirePasscode(passcode: string | undefined): RequestHandler {
   };
 }
 
-// Simple per-IP cap on photos sorted, so a leaked passcode can't run up a large bill.
+// Who may sort. The passcode always works (the owner, and the website). With subscriptions on,
+// a phone without it needs an active subscription, and each billing period has an allowance:
+// the request is charged for its photos up front and turned down with 402 once it is used up.
+function requireAccess(passcode: string | undefined, subs: SubscriptionOptions | undefined): RequestHandler {
+  // Free photos are handed out per phone id, which a script could make up. A per-IP daily
+  // ceiling keeps that from adding up to much.
+  const freeByIp = new Map<string, { day: number; count: number }>();
+  const freeFromIp = (ip: string, cost: number) => {
+    const day = Math.floor(Date.now() / 86_400_000);
+    let f = freeByIp.get(ip);
+    if (!f || f.day !== day) {
+      if (freeByIp.size > 100_000) freeByIp.clear();
+      freeByIp.set(ip, (f = { day, count: 0 }));
+    }
+    // Generous, since a whole mobile carrier's customers can share one address.
+    if (f.count + cost > (subs?.freeLimit ?? 0) * 50) return false;
+    f.count += cost;
+    return true;
+  };
+  return async (req, res, next) => {
+    if (passcode && sameSecret(String(req.get("x-organizeit-passcode") ?? ""), passcode)) return next();
+    if (!subs) {
+      if (!passcode) return next();
+      res.status(401).json({ error: "Enter the OrganizeIt passcode to sort photos." });
+      return;
+    }
+    const userId = String(req.get("x-organizeit-user") ?? "");
+    if (!validUserId(userId)) {
+      res.status(402).json({ error: "Subscribe to start sorting.", reason: "subscribe" });
+      return;
+    }
+    try {
+      const plan = await subs.plans.plan(userId);
+      const cost = Array.isArray(req.body?.photos) ? Math.max(1, req.body.photos.length) : 1;
+      if (!plan.active) {
+        // The free preview: the first photos on each phone are sorted before asking for a card.
+        const key = freeKey(userId);
+        if (
+          subs.freeLimit > 0 &&
+          (await subs.usage.used(key)) + cost <= subs.freeLimit &&
+          freeFromIp(req.ip ?? "unknown", cost) &&
+          (await subs.usage.add(key, cost, subs.freeLimit)) !== null
+        ) {
+          return next();
+        }
+        res.status(402).json({
+          error: subs.freeLimit > 0 ? `That's your ${subs.freeLimit} free photos. Subscribe to sort the rest.` : "Subscribe to start sorting.",
+          reason: "subscribe",
+        });
+        return;
+      }
+      const limit = limitFor(subs, plan);
+      if (limit > 0) {
+        if ((await subs.usage.add(usageKey(userId, plan), cost, limit)) === null) {
+          res.status(402).json({
+            error: plan.intro
+              ? `Your first month includes ${limit.toLocaleString("en-US")} photos. The rest are sorted when your subscription renews.`
+              : `You've sorted this month's ${limit.toLocaleString("en-US")} photos. The rest are sorted when your subscription renews.`,
+            reason: "limit",
+          });
+          return;
+        }
+      }
+      next();
+    } catch (err) {
+      if (!(err instanceof PlanUnavailable)) console.error(err);
+      res.status(502).json({ error: "Couldn't check your subscription. Try again in a moment.", reason: "plan-check" });
+    }
+  };
+}
+
+// Simple cap on photos sorted per hour, per subscriber (or per IP without one), so a leaked
+// passcode or one runaway phone can't run up a large bill.
 function rateLimit(perHour: number): RequestHandler {
   const hits = new Map<string, { start: number; count: number }>();
   return (req, res, next) => {
-    const key = req.ip ?? "unknown";
+    const key = req.get("x-organizeit-user") || req.ip || "unknown";
     const cost = Array.isArray(req.body?.photos) ? Math.max(1, req.body.photos.length) : 1;
     const now = Date.now();
     let h = hits.get(key);
@@ -48,7 +132,7 @@ const allowApp: RequestHandler = (req, res, next) => {
   if (origin && APP_ORIGINS.has(origin)) {
     res.set("Access-Control-Allow-Origin", origin);
     res.set("Vary", "Origin");
-    res.set("Access-Control-Allow-Headers", "content-type, x-organizeit-passcode");
+    res.set("Access-Control-Allow-Headers", "content-type, x-organizeit-passcode, x-organizeit-user");
     res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.set("Access-Control-Max-Age", "86400");
   }
@@ -59,15 +143,47 @@ const allowApp: RequestHandler = (req, res, next) => {
   next();
 };
 
-export function createApp(client: Anthropic | null, options: { passcode?: string; perHour?: number } = {}) {
+export function createApp(
+  client: Anthropic | null,
+  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions } = {},
+) {
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
   app.use(express.json({ limit: "25mb" }));
   const gate = requirePasscode(options.passcode || undefined);
+  const subs = options.subscriptions;
+  const access = requireAccess(options.passcode || undefined, subs);
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, ai: client !== null, passcodeRequired: Boolean(options.passcode) });
+    res.json({ ok: true, ai: client !== null, passcodeRequired: Boolean(options.passcode), subscriptions: Boolean(subs) });
+  });
+
+  // The app asks this on launch and right after a purchase (?fresh=1 skips the cached answer).
+  app.get("/api/subscription", async (req, res) => {
+    const userId = String(req.get("x-organizeit-user") ?? "");
+    if (!subs || !validUserId(userId)) {
+      res.json({ active: false, intro: false, used: 0, limit: 0, expires: null, cancelled: false, freeUsed: 0, freeLimit: 0 });
+      return;
+    }
+    if (req.query.fresh) subs.plans.forget?.(userId);
+    try {
+      const plan = await subs.plans.plan(userId);
+      const [used, freeUsed] = await Promise.all([plan.active ? subs.usage.used(usageKey(userId, plan)) : 0, subs.usage.used(freeKey(userId))]);
+      res.json({
+        active: plan.active,
+        intro: plan.intro,
+        used,
+        limit: plan.active ? limitFor(subs, plan) : 0,
+        expires: plan.expires,
+        cancelled: plan.cancelled,
+        freeUsed,
+        freeLimit: subs.freeLimit,
+      });
+    } catch (err) {
+      if (!(err instanceof PlanUnavailable)) console.error(err);
+      res.status(503).json({ error: "Couldn't check your subscription. Try again in a moment." });
+    }
   });
 
   app.post("/api/unlock", gate, (_req, res) => {
@@ -101,14 +217,14 @@ export function createApp(client: Anthropic | null, options: { passcode?: string
 
   const invalid = new ClassifyError("Invalid request.", 400);
 
-  app.post("/api/classify", gate, limit, handle(async (c, body) => {
+  app.post("/api/classify", access, limit, handle(async (c, body) => {
     const parsed = ClassifyRequest.safeParse(body);
     if (!parsed.success) throw invalid;
     return classifyPhoto(c, parsed.data);
   }));
 
   // Several photos per request: what the app uses while it is open.
-  app.post("/api/classify-batch", gate, limit, handle(async (c, body) => {
+  app.post("/api/classify-batch", access, limit, handle(async (c, body) => {
     const parsed = ClassifyBatchRequest.safeParse(body);
     if (!parsed.success) throw invalid;
     return { results: await classifyBatch(c, parsed.data) };
@@ -120,9 +236,26 @@ export function createApp(client: Anthropic | null, options: { passcode?: string
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  const rcKey = process.env.REVENUECAT_SECRET_KEY;
+  const subscriptions: SubscriptionOptions | undefined = rcKey
+    ? {
+        plans: cached(revenueCat(rcKey, process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro")),
+        // A database that can't be reached doesn't stop the server; counts fall back to memory.
+        usage: process.env.DATABASE_URL
+          ? await postgresUsage(process.env.DATABASE_URL).catch((err) => {
+              console.error("Couldn't use DATABASE_URL, keeping photo counts in memory:", err.message);
+              return memoryUsage();
+            })
+          : memoryUsage(),
+        freeLimit: Number(process.env.FREE_SORT_LIMIT ?? 100),
+        introLimit: Number(process.env.INTRO_SORT_LIMIT ?? 2000),
+        monthlyLimit: Number(process.env.MONTHLY_SORT_LIMIT ?? 0),
+      }
+    : undefined;
   const app = createApp(hasKey ? new Anthropic() : null, {
     passcode: process.env.APP_PASSCODE,
     perHour: Number(process.env.SORTS_PER_HOUR ?? 10_000),
+    subscriptions,
   });
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist");
   app.use(express.static(dist));
@@ -130,6 +263,8 @@ if (isMain) {
   const port = Number(process.env.PORT ?? 8787);
   app.listen(port, () => {
     console.log(`OrganizeIt API on http://localhost:${port}${hasKey ? "" : " (no ANTHROPIC_API_KEY: AI sorting disabled)"}`);
-    if (!process.env.APP_PASSCODE) console.log("APP_PASSCODE is not set: anyone who can reach this server can use the AI.");
+    if (!process.env.APP_PASSCODE && !rcKey) console.log("APP_PASSCODE is not set: anyone who can reach this server can use the AI.");
+    if (rcKey) console.log(`Subscriptions on (entitlement ${process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro"}).`);
+    if (rcKey && !process.env.DATABASE_URL) console.log("DATABASE_URL is not set: monthly sorting allowances reset whenever the server restarts.");
   });
 }

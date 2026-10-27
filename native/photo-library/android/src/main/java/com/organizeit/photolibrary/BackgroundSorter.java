@@ -134,7 +134,7 @@ final class BackgroundSorter {
         RETRY,
         /** No connection, or the server is asleep. */
         OFFLINE,
-        /** Wrong passcode or no AI key: retrying won't help. */
+        /** Wrong passcode, no subscription or no AI key: retrying won't help. */
         PERMANENT
     }
 
@@ -224,7 +224,7 @@ final class BackgroundSorter {
                     }
                 }
                 if (problem == Answer.PERMANENT) {
-                    ending = "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.";
+                    ending = "Stopped: the server turned the photos down (subscription, passcode or AI key). Open OrganizeIt to see why.";
                     return Outcome.BLOCKED;
                 }
                 if (problem != null) {
@@ -369,11 +369,13 @@ final class BackgroundSorter {
             http.setDoOutput(true);
             http.setRequestProperty("content-type", "application/json");
             http.setRequestProperty("x-organizeit-passcode", config.optString("passcode"));
+            if (!config.optString("userId").isEmpty()) http.setRequestProperty("x-organizeit-user", config.optString("userId"));
             try (OutputStream os = http.getOutputStream()) {
                 os.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
             int code = http.getResponseCode();
-            if (code == 401 || code == 503) return Answer.PERMANENT; // wrong passcode, or the server has no working AI key
+            // Wrong passcode, no subscription (or this month's photos used up), or no working AI key.
+            if (code == 401 || code == 402 || code == 503) return Answer.PERMANENT;
             if (code == 429 || code >= 500) return Answer.RETRY;
             if (code != 200) return Answer.SKIP;
             ByteArrayOutputStream text = new ByteArrayOutputStream();

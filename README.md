@@ -30,11 +30,37 @@ process on `PORT` (default 8787).
 3. Deploy. Open the `…onrender.com` address on your phone, enter the passcode once, and use
    Share → **Add to Home Screen** to get an app icon.
 
-The passcode keeps strangers from using your Anthropic credits, and each IP is capped at
-`SORTS_PER_HOUR` photos per hour (default 10,000). `CLASSIFY_MODEL` picks the Claude model
-(default `claude-opus-5-5`); `claude-haiku-5-5` is much faster and cheaper, at some cost in
-accuracy. On the free plan the server sleeps after
-15 minutes idle, so the first sort after a break takes about a minute to start.
+The passcode keeps strangers from using your Anthropic credits, and each subscriber (or IP,
+without one) is capped at `SORTS_PER_HOUR` photos per hour (default 10,000). On the free plan
+the server sleeps after 15 minutes idle, so the first sort after a break takes about a minute
+to start; for paying customers use a paid instance (Starter or above), which stays awake.
+
+Sorting runs in two passes to keep the AI bill down: every photo goes to `CLASSIFY_MODEL`
+(default `claude-haiku-5-5`, fast and cheap), and only photos it is less than
+`CLASSIFY_ESCALATE_BELOW` sure about (default 0.75) or can't place are asked again of
+`CLASSIFY_ESCALATE_MODEL` (default `claude-opus-5-5`). `CLASSIFY_ESCALATE_MODEL=none` turns
+the second pass off.
+
+### Subscriptions
+
+The phone app sells a monthly subscription through the App Store and Google Play, with a
+discounted first month, via [RevenueCat](https://www.revenuecat.com). Each phone gets
+`FREE_SORT_LIMIT` photos sorted free first (default 100), the discounted month sorts up to
+`INTRO_SORT_LIMIT` photos (default 2,000; the rest wait for the first full-price month), and
+full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
+
+- Server: `REVENUECAT_SECRET_KEY` (RevenueCat → Project settings → API keys → secret key)
+  turns subscriptions on. `DATABASE_URL` (any Postgres, e.g. a Render Postgres database)
+  keeps the photo counts through restarts; without it they live in memory.
+  `REVENUECAT_ENTITLEMENT` is the entitlement id (default `organizeit_pro`).
+- App builds: `VITE_REVENUECAT_IOS_KEY` and `VITE_REVENUECAT_ANDROID_KEY` in `.env.app`
+  (RevenueCat's public app-specific keys, safe to ship) let the app show the store's
+  purchase sheet.
+- Each phone is known by an id that survives reinstalling the app (a keychain entry on
+  iPhone, `ANDROID_ID` on Android), which is also its RevenueCat user id. "Restore purchases"
+  moves a subscription to a new phone.
+- The passcode still sorts without a subscription (the website, and the owner via
+  "Have a passcode?" on the subscribe screen).
 
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
 

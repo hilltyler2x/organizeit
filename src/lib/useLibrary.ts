@@ -15,7 +15,21 @@ import { markNotDuplicate, setHashes } from "../core/duplicates";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
-import { API, ApiError, classifyBatch, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
+import {
+  API,
+  ApiError,
+  classifyBatch,
+  currentPasscode,
+  currentUserId,
+  hasPasscode,
+  serverStatus,
+  setUserId,
+  subscriptionMode,
+  subscriptionStatus,
+  unlock,
+  type Subscription,
+} from "./api";
+import { startPurchases } from "./purchases";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { photoHash } from "./fingerprint";
@@ -59,6 +73,14 @@ export function useLibrary() {
   const [aiProblem, setAiProblem] = useState<string | null>(null);
   const ai = server === "ok" ? true : server === "no-ai" ? false : null;
   const [locked, setLocked] = useState(false);
+  // Inside the phone app, once the server sells subscriptions: who this is to the server, their
+  // plan, and why sorting is paused for want of one (no subscription, or the month's photos used).
+  const [userReady, setUserReady] = useState(!isNativeApp);
+  const [subscriptions, setSubscriptions] = useState(false);
+  const [plan, setPlan] = useState<Subscription | null>(null);
+  const [paywall, setPaywall] = useState<{ reason: "subscribe" | "limit"; message: string } | null>(null);
+  // "Not now" on the subscribe card: shrinks it to one line until the app is next opened.
+  const [paywallHidden, setPaywallHidden] = useState(false);
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
@@ -138,8 +160,42 @@ export function useLibrary() {
     lastAnswer.current = Date.now();
     setServer(s.ai ? "ok" : "no-ai");
     setAiProblem(null);
-    setLocked(s.passcodeRequired && !hasPasscode());
+    const selling = s.subscriptions && isNativeApp;
+    if (selling) subscriptionMode();
+    setSubscriptions(selling);
+    // On the phone a subscription stands in for the passcode.
+    setLocked(s.passcodeRequired && !hasPasscode() && !selling);
   }, []);
+
+  useEffect(() => {
+    if (!isNativeApp) return;
+    startPurchases().then((id) => {
+      setUserId(id);
+      setUserReady(true);
+    });
+  }, []);
+
+  /** Asks the server about this person's plan; lifts the pause once they can sort again. */
+  const refreshPlan = useCallback(async (fresh = false) => {
+    const p = await subscriptionStatus(fresh);
+    if (!p) return null;
+    setPlan(p);
+    if (hasPasscode() || (p.active && (p.limit === 0 || p.used < p.limit))) setPaywall(null);
+    else if (p.active) setPaywall({ reason: "limit", message: `You've sorted the ${p.limit.toLocaleString()} photos this month includes. The rest are sorted when your subscription renews.` });
+    else if (p.freeUsed >= p.freeLimit) {
+      setPaywall({ reason: "subscribe", message: p.freeLimit ? `That's your ${p.freeLimit} free photos. Subscribe to sort the rest.` : "Subscribe to start sorting." });
+    }
+    return p;
+  }, []);
+
+  useEffect(() => {
+    if (!subscriptions || !userReady) return;
+    refreshPlan();
+    // Coming back to the app may follow a purchase, a renewal or a new month.
+    const onVisible = () => document.visibilityState === "visible" && refreshPlan(true);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [subscriptions, userReady, refreshPlan]);
 
   useEffect(() => {
     checkServer();
@@ -226,6 +282,19 @@ export function useLibrary() {
       recordFinished(ready.length);
     } catch (err) {
       const backToQueue = () => markAll(ready.map((p) => p.id), () => ({ status: "queued", error: undefined }));
+      if (err instanceof ApiError && err.status === 402) {
+        // No subscription, or this month's photos are used up: wait in the queue.
+        setPaywall({ reason: err.reason === "limit" ? "limit" : "subscribe", message: err.message });
+        await backToQueue();
+        refreshPlan();
+        return;
+      }
+      if (err instanceof ApiError && err.reason === "plan-check") {
+        // The server couldn't reach the subscription service: try again shortly.
+        await backToQueue();
+        await new Promise((r) => setTimeout(r, 10_000));
+        return;
+      }
       if (err instanceof ApiError && err.status === 401) {
         // Wrong or missing passcode: wait in the queue until it is entered.
         setLocked(true);
@@ -264,7 +333,7 @@ export function useLibrary() {
       );
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
     }
-  }, [commit, markAll, recordFinished, serverAnswered]);
+  }, [commit, markAll, recordFinished, serverAnswered, refreshPlan]);
 
   // Fingerprint every photo so duplicates can be spotted. Runs on its own next to sorting, a
   // chunk at a time, and picks up new photos as they arrive. A photo that couldn't be read is
@@ -312,7 +381,7 @@ export function useLibrary() {
   // Work through the queue newest first, a batch of photos per request and a few requests
   // at a time.
   const pump = useCallback(() => {
-    if (!ai || locked || scanning.current) return;
+    if (!ai || locked || paywall || !userReady || scanning.current) return;
     const free = CONCURRENCY - batches.current;
     if (free <= 0) return;
     const queued = stateRef.current.photos
@@ -329,7 +398,7 @@ export function useLibrary() {
         pump();
       });
     }
-  }, [ai, locked, classifyGroup]);
+  }, [ai, locked, paywall, userReady, classifyGroup]);
 
   // Once the queue is empty, the next round of sorting starts its progress from zero.
   const idle = !state.photos.some((p) => p.status === "queued" || p.status === "classifying");
@@ -410,6 +479,7 @@ export function useLibrary() {
     BackgroundSort.configure({
       apiUrl: API,
       passcode: currentPasscode(),
+      userId: currentUserId(),
       categories: s.categories.map((c) => ({ section: c.section, name: c.name })),
       lessons: lessonsForPrompt(lessonsRef.current, s.categories),
       ...backgroundQueue(s),
@@ -420,7 +490,7 @@ export function useLibrary() {
     if (!ready || !isNativeApp) return;
     const timer = setTimeout(syncBackground, 1500);
     return () => clearTimeout(timer);
-  }, [ready, state, lessonCount, locked, syncBackground]);
+  }, [ready, state, lessonCount, locked, userReady, syncBackground]);
 
   useEffect(() => {
     if (!isNativeApp) return;
@@ -569,9 +639,20 @@ export function useLibrary() {
     allowFullAccess,
     unlock: async (code: string) => {
       const ok = await unlock(code);
-      if (ok) setLocked(false);
+      if (ok) {
+        setLocked(false);
+        setPaywall(null);
+      }
       return ok;
     },
+    /** The phone app sells subscriptions (the server has them turned on). */
+    subscriptions,
+    plan,
+    /** Why sorting is paused for want of a subscription, if it is. */
+    paywall,
+    paywallHidden,
+    hidePaywall: setPaywallHidden,
+    refreshPlan,
     importPhotos,
     retry,
     move,

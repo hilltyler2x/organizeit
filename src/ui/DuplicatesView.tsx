@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { duplicateTotals, findDuplicates, type DuplicateGroup } from "../core/duplicates";
 import { formatBytes } from "../core/storage";
 import type { Library } from "../lib/useLibrary";
+import { DuplicateInspector } from "./DuplicateInspector";
 import { Thumb, forgetImages } from "./Thumb";
 
 // Photos that look like copies of each other. Like To review this is a to-do list, not a
@@ -16,6 +17,8 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // The set open full screen (by its first photo's id) and which copy to show first.
+  const [inspecting, setInspecting] = useState<{ key: string; start: number } | null>(null);
 
   const keeps = (g: DuplicateGroup, id: string) => overrides.get(id) ?? id === g.photos[0].id;
   const toDelete = (g: DuplicateGroup) => g.photos.filter((p) => !keeps(g, p.id));
@@ -67,6 +70,7 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
   }
 
   const allExtras = groups.flatMap(toDelete);
+  const inspected = inspecting ? groups.find((g) => g.photos[0].id === inspecting.key) : undefined;
 
   return (
     <section className="review-view duplicates-view">
@@ -76,7 +80,7 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
           <h1>{totals.extras.toLocaleString()} duplicate photo{totals.extras === 1 ? "" : "s"}</h1>
           <p className="muted">
             These look like copies of each other, using {formatBytes(totals.bytes)}. OrganizeIt keeps the best copy of each set
-            (the biggest, then the original). Tap a photo to switch it between Keep and Delete.
+            (the biggest, then the original). Tap a photo to look at it up close, and tap Keep or Delete on it to switch.
           </p>
           {checking}
         </div>
@@ -102,18 +106,26 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
                   const category = lib.categories.find((c) => c.id === p.categoryId)?.name;
                   return (
                     <li key={p.id} className={keep ? "keep" : "selected"}>
-                      <button
-                        className="tile"
-                        aria-pressed={!keep}
-                        aria-label={`${p.label ?? p.fileName}: ${keep ? "keep" : "delete"}`}
-                        onClick={() => toggle(g, p.id)}
-                      >
-                        <Thumb photo={p} alt={p.label ?? p.fileName} />
-                        <span className={`dupe-badge ${keep ? "keep" : "delete"}`}>{keep ? "Keep" : "Delete"}</span>
+                      <div className="tile">
+                        <button
+                          className="tile-open"
+                          aria-label={`Look at ${p.label ?? p.fileName}`}
+                          onClick={() => setInspecting({ key: g.photos[0].id, start: g.photos.indexOf(p) })}
+                        >
+                          <Thumb photo={p} alt={p.label ?? p.fileName} />
+                        </button>
+                        <button
+                          className={`dupe-badge ${keep ? "keep" : "delete"}`}
+                          aria-pressed={!keep}
+                          aria-label={`${keep ? "Keep" : "Delete"}: tap to switch`}
+                          onClick={() => toggle(g, p.id)}
+                        >
+                          {keep ? "Keep" : "Delete"}
+                        </button>
                         <span className="caption">
                           {p.width}×{p.height} · {formatBytes(p.bytes)}{category ? ` · ${category}` : ""}
                         </span>
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -128,6 +140,17 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
           );
         })}
       </ul>
+
+      {inspected && (
+        <DuplicateInspector
+          lib={lib}
+          photos={inspected.photos}
+          start={inspecting!.start}
+          keeps={(id) => keeps(inspected, id)}
+          onToggle={(id) => toggle(inspected, id)}
+          onClose={() => setInspecting(null)}
+        />
+      )}
     </section>
   );
 }

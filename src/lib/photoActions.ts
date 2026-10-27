@@ -11,6 +11,7 @@ import { PhotoLibrary } from "./photoLibrary";
 /** Copies a photo so it can be pasted elsewhere. */
 export async function copyPhoto(photo: Photo): Promise<void> {
   if (photo.source.kind === "native") return PhotoLibrary.copyImage({ id: photo.source.assetId });
+  if (photo.isVideo) throw new Error("Browsers can't copy videos. Use Share instead.");
   if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
     throw new Error("This browser can't copy photos. Use Share instead.");
   }
@@ -31,7 +32,7 @@ export async function sharePhoto(photo: Photo): Promise<void> {
   }
   const original = (await store.getBlobs(photo.id))?.original;
   if (!original) throw new Error("Photo data is missing.");
-  const file = new File([original], photo.fileName, { type: original.type || "image/jpeg" });
+  const file = new File([original], photo.fileName, { type: original.type || photo.mimeType || "image/jpeg" });
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });

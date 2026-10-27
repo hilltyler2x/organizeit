@@ -289,14 +289,19 @@ final class BackgroundSorter {
         }
         if (!queued.isEmpty()) {
             List<String> wanted = queued.subList(0, Math.min(queued.size(), BATCH * 2));
-            StringBuilder where = new StringBuilder(MediaStore.Images.Media._ID + " IN (");
-            for (int i = 0; i < wanted.size(); i++) where.append(i == 0 ? "?" : ",?");
-            where.append(")");
             List<JSONObject> found = new ArrayList<>();
-            try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), where.toString(), wanted.toArray(new String[0]), null)) {
-                if (c != null && c.moveToFirst()) {
-                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
-                    do found.add(MediaAssets.describe(c, cols)); while (c.moveToNext());
+            for (boolean video : new boolean[] { false, true }) {
+                List<String> rows = new ArrayList<>();
+                for (String id : wanted) if (MediaAssets.isVideo(id) == video) rows.add(MediaAssets.rowId(id));
+                if (rows.isEmpty()) continue;
+                StringBuilder where = new StringBuilder(MediaStore.MediaColumns._ID + " IN (");
+                for (int i = 0; i < rows.size(); i++) where.append(i == 0 ? "?" : ",?");
+                where.append(")");
+                try (Cursor c = resolver.query(MediaAssets.table(video), MediaAssets.projection(video), where.toString(), rows.toArray(new String[0]), null)) {
+                    if (c != null && c.moveToFirst()) {
+                        MediaAssets.Columns cols = new MediaAssets.Columns(c);
+                        do found.add(MediaAssets.describe(c, cols)); while (c.moveToNext());
+                    }
                 }
             }
             // Keep the app's order (newest first); photos deleted since are dropped.
@@ -309,18 +314,20 @@ final class BackgroundSorter {
         }
         long knownUpTo = (long) config.optDouble("knownUpTo", 0);
         int fresh = 0;
-        String where = "(" + MediaStore.Images.Media.DATE_TAKEN + " > ? OR " + MediaStore.Images.Media.DATE_ADDED + " > ?)";
+        String where = "(" + MediaStore.MediaColumns.DATE_TAKEN + " > ? OR " + MediaStore.MediaColumns.DATE_ADDED + " > ?)";
         String[] args = { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) };
-        String order = MediaStore.Images.Media.DATE_ADDED + " DESC";
-        try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), where, args, order)) {
-            if (c != null && c.moveToFirst()) {
-                MediaAssets.Columns cols = new MediaAssets.Columns(c);
-                do {
-                    String id = String.valueOf(c.getLong(cols.id));
-                    if (skip.contains(id) || queuedSet.contains(id)) continue;
-                    fresh++;
-                    if (batch.assets.size() < BATCH) batch.assets.add(MediaAssets.describe(c, cols));
-                } while (c.moveToNext() && fresh < 500);
+        String order = MediaStore.MediaColumns.DATE_ADDED + " DESC";
+        for (boolean video : new boolean[] { false, true }) {
+            try (Cursor c = resolver.query(MediaAssets.table(video), MediaAssets.projection(video), where, args, order)) {
+                if (c != null && c.moveToFirst()) {
+                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
+                    do {
+                        String id = (video ? MediaAssets.VIDEO_PREFIX : "") + c.getLong(cols.id);
+                        if (skip.contains(id) || queuedSet.contains(id)) continue;
+                        fresh++;
+                        if (batch.assets.size() < BATCH) batch.assets.add(MediaAssets.describe(c, cols));
+                    } while (c.moveToNext() && fresh < 500);
+                }
             }
         }
         batch.waiting = queued.size() + fresh;
@@ -330,7 +337,8 @@ final class BackgroundSorter {
     private Answer classify(JSONObject asset, JSONObject config, JSONArray categories, JSONArray learned) {
         String image;
         try {
-            Bitmap bitmap = MediaAssets.decode(context.getContentResolver(), MediaAssets.uriFor(asset.getString("id")), 768);
+            // A video is sent as four frames from across it in one image.
+            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), 768, true);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
             bitmap.recycle();
@@ -348,6 +356,10 @@ final class BackgroundSorter {
             body.put("width", asset.optInt("width"));
             body.put("height", asset.optInt("height"));
             body.put("isScreenshot", asset.optBoolean("isScreenshot"));
+            if (asset.optBoolean("isVideo")) {
+                body.put("isVideo", true);
+                body.put("durationSec", Math.round(asset.optLong("durationMs") / 1000.0));
+            }
             body.put("categories", categories);
             body.put("lessons", config.optJSONArray("lessons") == null ? new JSONArray() : config.optJSONArray("lessons"));
             http = (HttpURLConnection) new URL(config.getString("apiUrl") + "/api/classify").openConnection();

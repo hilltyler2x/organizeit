@@ -73,6 +73,7 @@ public class BackgroundSortWorker extends Worker {
         Constraints constraints = online()
             .setRequiresBatteryNotLow(true)
             .addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
+            .addContentUriTrigger(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true)
             .setTriggerContentUpdateDelay(3, TimeUnit.SECONDS)
             .setTriggerContentMaxDelay(15, TimeUnit.SECONDS)
             .build();

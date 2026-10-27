@@ -1,15 +1,42 @@
-import { useState } from "react";
-import { formatBytes } from "../core/storage";
+import { useEffect, useState } from "react";
+import { formatBytes, formatDuration } from "../core/storage";
 import type { Category, Photo } from "../core/types";
+import { videoSource } from "../lib/media";
 import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
 import { PhotoMenu, copyAndShare } from "./PhotoMenu";
 import { useLongPress } from "./selection";
 import { forgetImages, useImageUrl } from "./Thumb";
 
+/** Plays a video; the poster frame shows while it loads, which can take a moment for a big one. */
+function VideoPlayer({ photo }: { photo: Photo }) {
+  const poster = useImageUrl(photo, "thumb");
+  const [src, setSrc] = useState<string>();
+  const [problem, setProblem] = useState("");
+  useEffect(() => {
+    let live = true;
+    let release = () => {};
+    videoSource(photo).then(
+      (v) => {
+        release = v.release;
+        if (live) setSrc(v.url);
+        else v.release();
+      },
+      (e) => live && setProblem(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+      release();
+    };
+  }, [photo.id]);
+  if (problem) return <p className="video-wait">{problem}</p>;
+  if (!src) return poster ? <img src={poster} alt={photo.label ?? photo.fileName} draggable={false} /> : <p className="video-wait">Loading video…</p>;
+  return <video src={src} poster={poster} controls playsInline autoPlay aria-label={photo.label ?? photo.fileName} />;
+}
+
 export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Category; onClose: () => void; onEmptied: (deleted?: string) => void }) {
   const { lib, photo } = props;
-  const url = useImageUrl(photo, "full");
+  const url = useImageUrl(photo, photo.isVideo ? "thumb" : "full");
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState("");
   const [menu, setMenu] = useState(false);
@@ -17,7 +44,7 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
 
   const remove = async () => {
     // In the app the phone shows its own delete confirmation.
-    if (!lib.native && !confirm("Delete this photo from OrganizeIt?")) return;
+    if (!lib.native && !confirm(`Delete this ${photo.isVideo ? "video" : "photo"} from OrganizeIt?`)) return;
     setError("");
     try {
       const deleted = await lib.remove([photo.id]);
@@ -32,9 +59,16 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
   return (
     <div className="modal-backdrop" onClick={props.onClose}>
       <div className="viewer" role="dialog" aria-modal="true" aria-label={photo.label ?? photo.fileName} onClick={(e) => e.stopPropagation()}>
-        <div className="viewer-image" {...press.handlers(photo.id)}>
-          {url && <img src={url} alt={photo.label ?? photo.fileName} draggable={false} />}
-        </div>
+        {photo.isVideo ? (
+          // No press-and-hold here: holding would fight the video's own controls.
+          <div className="viewer-image">
+            <VideoPlayer photo={photo} />
+          </div>
+        ) : (
+          <div className="viewer-image" {...press.handlers(photo.id)}>
+            {url && <img src={url} alt={photo.label ?? photo.fileName} draggable={false} />}
+          </div>
+        )}
         <div className="viewer-info">
           <h2>{photo.label ?? photo.fileName}</h2>
           <dl>
@@ -42,6 +76,7 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
             {photo.confidence !== undefined && (<><dt>AI confidence</dt><dd>{Math.round(photo.confidence * 100)}%</dd></>)}
             <dt>File</dt><dd>{photo.fileName}</dd>
             <dt>Size</dt><dd>{formatBytes(photo.bytes)} · {photo.width}×{photo.height}</dd>
+            {photo.isVideo && (<><dt>Length</dt><dd>{photo.durationMs ? formatDuration(photo.durationMs) : "Video"}</dd></>)}
             <dt>Date</dt><dd>{new Date(photo.takenAt).toLocaleDateString()}</dd>
             {photo.error && (<><dt>Problem</dt><dd className="error">{photo.error}</dd></>)}
           </dl>

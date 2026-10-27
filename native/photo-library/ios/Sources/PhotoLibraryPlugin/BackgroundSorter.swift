@@ -32,11 +32,15 @@ struct DeviceAsset: Codable {
     var bytes: Int64
     var mimeType: String
     var isScreenshot: Bool
+    // Optional so answers saved before videos were sorted still load.
+    var isVideo: Bool?
+    var durationMs: Double?
 
     init(_ asset: PHAsset) {
+        let video = asset.mediaType == .video
         let resources = PHAssetResource.assetResources(for: asset)
-        let original = resources.first { $0.type == .photo } ?? resources.first
-        var mimeType = "image/jpeg"
+        let original = resources.first { $0.type == (video ? .video : .photo) } ?? resources.first
+        var mimeType = video ? "video/quicktime" : "image/jpeg"
         if let uti = original?.uniformTypeIdentifier, let type = UTType(uti), let mime = type.preferredMIMEType {
             mimeType = mime
         }
@@ -48,13 +52,22 @@ struct DeviceAsset: Codable {
         bytes = (original?.value(forKey: "fileSize") as? NSNumber)?.int64Value ?? 0
         self.mimeType = mimeType
         isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
+        if video {
+            isVideo = true
+            durationMs = (asset.duration * 1000).rounded()
+        }
     }
 
     var dictionary: [String: Any] {
-        [
+        var out: [String: Any] = [
             "id": id, "fileName": fileName, "width": width, "height": height, "createdAt": createdAt,
             "bytes": bytes, "mimeType": mimeType, "isScreenshot": isScreenshot
         ]
+        if isVideo == true {
+            out["isVideo"] = true
+            out["durationMs"] = durationMs ?? 0
+        }
+        return out
     }
 }
 
@@ -509,13 +522,12 @@ public final class BackgroundSorter {
     private func nextBatch(_ config: BackgroundSortConfig, skipping skip: inout Set<String>, size: Int) -> ([PHAsset], Int) {
         let queued = config.queued.filter { [skip] in !skip.contains($0) }
         let queuedSet = Set(config.queued)
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate)
+        let options = VideoFrames.mediaOptions(NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate))
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.fetchLimit = 500
         var fresh: [PHAsset] = []
         let skipped = skip
-        PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
+        PHAsset.fetchAssets(with: options).enumerateObjects { asset, _, _ in
             if !skipped.contains(asset.localIdentifier) && !queuedSet.contains(asset.localIdentifier) { fresh.append(asset) }
         }
         var batch: [PHAsset] = []
@@ -546,9 +558,14 @@ public final class BackgroundSorter {
 
     /// `download`: whether a photo kept only in iCloud may be downloaded (only while charging).
     private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName], download: Bool) async -> Result<Classification, SortError> {
-        guard let jpeg = await image(asset, maxSide: 768, quality: 0.8, download: download) else { return .failure(.skip) }
+        let isVideo = asset.mediaType == .video
+        // A video is sent as four frames from across it in one image.
+        let picture = isVideo
+            ? await VideoFrames.sheet(for: asset, maxSide: 768, quality: 0.8, download: download)?.0
+            : await image(asset, maxSide: 768, quality: 0.8, download: download)
+        guard let jpeg = picture else { return .failure(.skip) }
         let info = DeviceAsset(asset)
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "image": jpeg.base64EncodedString(),
             "mediaType": "image/jpeg",
             "fileName": String(info.fileName.prefix(300)),
@@ -562,6 +579,10 @@ public final class BackgroundSorter {
                 return l
             }
         ]
+        if isVideo {
+            body["isVideo"] = true
+            body["durationSec"] = Int(asset.duration.rounded())
+        }
         guard let url = URL(string: config.apiUrl + "/api/classify"),
               let payload = try? JSONSerialization.data(withJSONObject: body) else { return .failure(.permanent) }
         var request = URLRequest(url: url, timeoutInterval: 90) // the free server can take a minute to wake

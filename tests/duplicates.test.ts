@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
-import { differenceHash, duplicateTotals, findDuplicates, hashDistance, isOldFingerprint, makeFingerprint, markNotDuplicate, setHashes } from "../src/core/duplicates";
+import { differentMoments, differenceHash, duplicateTotals, findDuplicates, hashDistance, isOldFingerprint, makeFingerprint, markNotDuplicate, setHashes } from "../src/core/duplicates";
 import { removePhotos } from "../src/core/library";
 import type { Photo } from "../src/core/types";
 
@@ -69,6 +69,21 @@ describe("duplicate photos", () => {
     // A small move, like an arm or a turned head, is enough.
     const nudged = scene.map((v, i) => (i === 120 ? v + 90 : v));
     expect(findDuplicates([photo("a", A), photo("b", makeFingerprint(A_HASH, nudged))])).toEqual([]);
+  });
+
+  it("never matches two full-size shots taken at different moments, however alike they look", () => {
+    // Tyler's burst in front of the graffiti wall: same size, seconds apart, different files.
+    const shot = (id: string, takenAt: number, bytes: number) => photo(id, A, { width: 5328, height: 4000, takenAt, bytes });
+    expect(findDuplicates([shot("a", 0, 15_100_000), shot("b", 2000, 15_300_000), shot("c", 4000, 14_900_000)])).toEqual([]);
+    expect(differentMoments(shot("a", 0, 1), shot("b", 2000, 2))).toBe(true);
+    // The same moment (Duplicate in Photos), or the very same file saved twice, is a copy.
+    expect(findDuplicates([shot("a", 0, 15_100_000), shot("dup", 0, 15_200_000)])).toHaveLength(1);
+    expect(findDuplicates([shot("a", 0, 15_100_000), shot("saved-again", 90_000, 15_100_000)])).toHaveLength(1);
+    // A resized copy is still caught, but never joins two separate shots into one set.
+    const resized = photo("r", A2, { width: 1080, height: 811, takenAt: 600_000, bytes: 300_000 });
+    const groups = findDuplicates([shot("a", 0, 15_100_000), shot("b", 2000, 15_300_000), resized]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].photos).toHaveLength(2);
   });
 
   it("ignores fingerprints from before the detail check until they are worked out again", () => {

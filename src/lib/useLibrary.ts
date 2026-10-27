@@ -11,7 +11,7 @@ import {
   type LibraryState,
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
-import { markNotDuplicate, setHashes } from "../core/duplicates";
+import { isOldFingerprint, markNotDuplicate, setHashes } from "../core/duplicates";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
@@ -340,7 +340,9 @@ export function useLibrary() {
   // tried again once each time the app starts (e.g. it was in iCloud with no signal).
   const hashing = useRef(false);
   const retried = useRef(new Set<string>());
-  const needsHash = (p: Photo) => p.hash === undefined || (p.hash === "" && !retried.current.has(p.id));
+  // Fingerprints from before the stricter duplicate check are worked out again.
+  const needsHash = (p: Photo) =>
+    p.hash === undefined || (p.hash === "" && !retried.current.has(p.id)) || (isOldFingerprint(p.hash) && !retried.current.has(p.id));
   const [unchecked, setUnchecked] = useState(0);
   const hashPhotos = useCallback(async () => {
     if (hashing.current) return;

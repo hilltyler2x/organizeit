@@ -90,3 +90,16 @@ describe("sorting a video on the server", () => {
     expect(calls[0].system).toMatch(/2x2 grid/);
   });
 });
+
+describe("duplicates", () => {
+  it("never pairs a video with a photo, and only pairs videos of the same length", async () => {
+    const { findDuplicates } = await import("../src/core/duplicates");
+    const item = (id: string, extra: object = {}) => ({
+      id, fileName: id, mimeType: "", bytes: 1, width: 400, height: 300, takenAt: 0, importedAt: 0, status: "sorted" as const,
+      hash: "3c7e1f0f8f1e3c78", source: { kind: "file" as const }, ...extra,
+    });
+    expect(findDuplicates([item("photo"), item("video", { isVideo: true, durationMs: 5000 })])).toHaveLength(0);
+    expect(findDuplicates([item("v1", { isVideo: true, durationMs: 5000 }), item("v2", { isVideo: true, durationMs: 20000 })])).toHaveLength(0);
+    expect(findDuplicates([item("v1", { isVideo: true, durationMs: 5000 }), item("v2", { isVideo: true, durationMs: 5400 })])).toHaveLength(1);
+  });
+});

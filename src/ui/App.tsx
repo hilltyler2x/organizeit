@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
+import { DuplicatesView } from "./DuplicatesView";
 import { Toaster } from "./PhotoMenu";
 import { ReviewView } from "./ReviewView";
 import { Thumb } from "./Thumb";
 
-type View = { kind: "overview" } | { kind: "review" } | { kind: "category"; id: string };
+type View = { kind: "overview" } | { kind: "review" } | { kind: "duplicates" } | { kind: "category"; id: string };
 
 export function App() {
   const lib = useLibrary();
@@ -20,6 +22,7 @@ export function App() {
   const usage = useMemo(() => usageByCategory(lib.categories, lib.photos), [lib.categories, lib.photos]);
   const category = view.kind === "category" ? lib.categories.find((c) => c.id === view.id) : undefined;
   const toReview = useMemo(() => needsPerson(lib.photos).length, [lib.photos]);
+  const duplicates = useMemo(() => duplicateTotals(findDuplicates(lib.photos)), [lib.photos]);
   const withNew = useMemo(() => categoriesWithNew({ photos: lib.photos, categories: lib.categories }), [lib.photos, lib.categories]);
 
   // A category the AI created disappears once emptied; fall back to the overview.
@@ -80,6 +83,12 @@ export function App() {
               <span className="count">{toReview || ""}</span>
             </button>
           )}
+          {(duplicates.extras > 0 || view.kind === "duplicates") && (
+            <button className={`nav-item review-item ${view.kind === "duplicates" ? "active" : ""}`} onClick={() => open({ kind: "duplicates" })}>
+              <span>Duplicates</span>
+              <span className="count">{duplicates.extras || ""}</span>
+            </button>
+          )}
           {SECTIONS.map((s) => {
             const items = usage.filter((u) => u.category.section === s.id);
             if (items.length === 0) return null;
@@ -109,10 +118,20 @@ export function App() {
             <ConnectLibrary lib={lib} />
           ) : view.kind === "review" ? (
             <ReviewView lib={lib} onDone={() => open({ kind: "overview" })} />
+          ) : view.kind === "duplicates" ? (
+            <DuplicatesView lib={lib} onDone={() => open({ kind: "overview" })} />
           ) : category ? (
             <CategoryView lib={lib} category={category} onGone={() => open({ kind: "overview" })} />
           ) : (
-            <Overview lib={lib} usage={usage} onOpen={(id) => open({ kind: "category", id })} onReview={() => open({ kind: "review" })} onAdd={add} />
+            <Overview
+              lib={lib}
+              usage={usage}
+              duplicates={duplicates}
+              onOpen={(id) => open({ kind: "category", id })}
+              onReview={() => open({ kind: "review" })}
+              onDuplicates={() => open({ kind: "duplicates" })}
+              onAdd={add}
+            />
           )}
         </main>
       </div>
@@ -122,7 +141,15 @@ export function App() {
   );
 }
 
-function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage: CategoryUsage[]; onOpen: (id: string) => void; onReview: () => void; onAdd: (folder?: boolean) => void }) {
+function Overview({ lib, usage, duplicates, onOpen, onReview, onDuplicates, onAdd }: {
+  lib: Library;
+  usage: CategoryUsage[];
+  duplicates: { extras: number; bytes: number };
+  onOpen: (id: string) => void;
+  onReview: () => void;
+  onDuplicates: () => void;
+  onAdd: (folder?: boolean) => void;
+}) {
   const sections = usageBySection(usage);
   const total = usage.reduce((n, u) => n + u.bytes, 0);
   const used = usage.filter((u) => u.count > 0);
@@ -131,6 +158,15 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
   return (
     <div className="overview">
       <QueuePanel lib={lib} onReview={onReview} />
+      {duplicates.extras > 0 && (
+        <div className="queue-row duplicates-notice">
+          <span>
+            <strong>You have {duplicates.extras.toLocaleString()} duplicate photo{duplicates.extras === 1 ? "" : "s"}</strong>
+            <span className="muted small"> using {formatBytes(duplicates.bytes)}. Review them to keep the best copy and free up space.</span>
+          </span>
+          <button className="primary" onClick={onDuplicates}>Review duplicates</button>
+        </div>
+      )}
 
       {lib.native && SORT_LIMIT > 0 && (
         <p className="muted small">Test mode: sorting your newest {SORT_LIMIT.toLocaleString()} photos.</p>

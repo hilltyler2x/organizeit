@@ -56,6 +56,13 @@ export interface Photo {
   isVideo?: boolean;
   /** Length of a video in milliseconds. */
   durationMs?: number;
+  /**
+   * Fingerprint of what the photo looks like (16 hex digits), used to spot duplicates. Not set
+   * until worked out; an empty string means the image couldn't be read.
+   */
+  hash?: string;
+  /** The person said this photo is not a copy of the ones it looks like. */
+  notDuplicate?: boolean;
   /** Where the photo came from, so a native build can act on the original asset. */
   source: { kind: "file" } | { kind: "native"; assetId: string };
 }

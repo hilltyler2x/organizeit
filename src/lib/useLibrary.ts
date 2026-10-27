@@ -11,12 +11,14 @@ import {
   type LibraryState,
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
+import { markNotDuplicate, setHashes } from "../core/duplicates";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
 import { API, ApiError, classifyBatch, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
+import { photoHash } from "./fingerprint";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
 import { readVideo } from "./video";
@@ -45,6 +47,9 @@ export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 // Photos go to the server several at a time, with a few requests in flight at once.
 const BATCH_SIZE = 6;
 const CONCURRENCY = 4;
+// Duplicate fingerprints are worked out a chunk of photos at a time, alongside sorting.
+const HASH_CHUNK = 40;
+const HASH_CONCURRENCY = 4;
 
 export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
@@ -261,6 +266,43 @@ export function useLibrary() {
     }
   }, [commit, markAll, recordFinished, serverAnswered]);
 
+  // Fingerprint every photo so duplicates can be spotted. Runs on its own next to sorting, a
+  // chunk at a time, and picks up new photos as they arrive. A photo that couldn't be read is
+  // tried again once each time the app starts (e.g. it was in iCloud with no signal).
+  const hashing = useRef(false);
+  const retried = useRef(new Set<string>());
+  const needsHash = (p: Photo) => p.hash === undefined || (p.hash === "" && !retried.current.has(p.id));
+  const [unchecked, setUnchecked] = useState(0);
+  const hashPhotos = useCallback(async () => {
+    if (hashing.current) return;
+    hashing.current = true;
+    try {
+      for (;;) {
+        const todo = stateRef.current.photos.filter(needsHash).sort((a, b) => b.takenAt - a.takenAt);
+        setUnchecked(todo.length);
+        if (!todo.length) return;
+        const chunk = todo.slice(0, HASH_CHUNK);
+        for (const p of chunk) retried.current.add(p.id);
+        const hashes = new Map<string, string>();
+        for (let i = 0; i < chunk.length; i += HASH_CONCURRENCY) {
+          await Promise.all(
+            chunk.slice(i, i + HASH_CONCURRENCY).map((p) =>
+              photoHash(p).then((h) => hashes.set(p.id, h), () => hashes.set(p.id, "")),
+            ),
+          );
+        }
+        // Photos deleted while this chunk was read are simply not found.
+        await commit(setHashes(stateRef.current, hashes));
+      }
+    } finally {
+      hashing.current = false;
+    }
+  }, [commit]);
+
+  useEffect(() => {
+    if (ready && state.photos.some(needsHash)) hashPhotos();
+  }, [ready, state, hashPhotos]);
+
   // Reading the phone's library also collects what was sorted while the app was closed, so
   // the queue waits for it rather than sorting those photos a second time.
   const scanning = useRef(false);
@@ -427,6 +469,11 @@ export function useLibrary() {
     return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target, videos);
   }, [commit]);
 
+  /** The person says photos flagged as duplicates are not copies of each other. */
+  const keepAll = useCallback(async (ids: string[]) => {
+    await commit(markNotDuplicate(stateRef.current, ids));
+  }, [commit]);
+
   /** Clears a category's "new" dot once the person has opened it. */
   const markSeen = useCallback(async (categoryId: string) => {
     await commit(markCategorySeen(stateRef.current, categoryId));
@@ -532,6 +579,9 @@ export function useLibrary() {
     remove,
     addToAlbum,
     markSeen,
+    keepAll,
+    /** Photos not yet checked for duplicates. */
+    unchecked,
     rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
   };
 }

@@ -132,12 +132,23 @@ export function memoryUsage(): UsageStore {
 /** Counts kept in Postgres, so they survive restarts and are shared by every server instance. */
 export async function postgresUsage(url: string): Promise<UsageStore> {
   const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: url, max: 5, ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false } });
-  await pool.query(`CREATE TABLE IF NOT EXISTS sort_usage (
-    key text PRIMARY KEY,
-    count integer NOT NULL,
-    updated_at timestamptz NOT NULL DEFAULT now()
-  )`);
+  const setUp = async (ssl: boolean) => {
+    const pool = new pg.Pool({ connectionString: url, max: 5, ssl: ssl ? { rejectUnauthorized: false } : undefined });
+    try {
+      await pool.query(`CREATE TABLE IF NOT EXISTS sort_usage (
+        key text PRIMARY KEY,
+        count integer NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+      return pool;
+    } catch (err) {
+      await pool.end().catch(() => undefined);
+      throw err;
+    }
+  };
+  // Encrypted when the database offers it (external URLs require it; Render's internal ones
+  // may not), plain otherwise.
+  const pool = await setUp(true).catch(() => setUp(false));
   return {
     async add(key, n, limit) {
       if (n > limit) return null;

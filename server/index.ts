@@ -240,7 +240,13 @@ if (isMain) {
   const subscriptions: SubscriptionOptions | undefined = rcKey
     ? {
         plans: cached(revenueCat(rcKey, process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro")),
-        usage: process.env.DATABASE_URL ? await postgresUsage(process.env.DATABASE_URL) : memoryUsage(),
+        // A database that can't be reached doesn't stop the server; counts fall back to memory.
+        usage: process.env.DATABASE_URL
+          ? await postgresUsage(process.env.DATABASE_URL).catch((err) => {
+              console.error("Couldn't use DATABASE_URL, keeping photo counts in memory:", err.message);
+              return memoryUsage();
+            })
+          : memoryUsage(),
         freeLimit: Number(process.env.FREE_SORT_LIMIT ?? 100),
         introLimit: Number(process.env.INTRO_SORT_LIMIT ?? 2000),
         monthlyLimit: Number(process.env.MONTHLY_SORT_LIMIT ?? 0),
@@ -258,6 +264,7 @@ if (isMain) {
   app.listen(port, () => {
     console.log(`OrganizeIt API on http://localhost:${port}${hasKey ? "" : " (no ANTHROPIC_API_KEY: AI sorting disabled)"}`);
     if (!process.env.APP_PASSCODE && !rcKey) console.log("APP_PASSCODE is not set: anyone who can reach this server can use the AI.");
+    if (rcKey) console.log(`Subscriptions on (entitlement ${process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro"}).`);
     if (rcKey && !process.env.DATABASE_URL) console.log("DATABASE_URL is not set: monthly sorting allowances reset whenever the server restarts.");
   });
 }

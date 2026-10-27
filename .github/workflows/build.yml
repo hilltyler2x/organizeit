@@ -53,7 +53,25 @@ jobs:
       # A stable download link for installing on a phone:
       # https://github.com/<owner>/<repo>/releases/download/test-build/OrganizeIt-test.apk
       - name: Publish test build
+        id: publish
         if: github.ref == 'refs/heads/main'
+        # GitHub's release API sometimes fails for a moment; try once more before failing the build.
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build
+          prerelease: true
+          make_latest: false
+          body: |
+            Latest test builds of OrganizeIt from `main` (${{ github.sha }}).
+            iPhone: install OrganizeIt-test.ipa with Sideloadly. Android: open this page on the phone and install OrganizeIt-test.apk.
+          files: OrganizeIt-test.apk
+      - name: Wait before retrying publish
+        if: steps.publish.outcome == 'failure'
+        run: sleep 20
+      - name: Publish test build (retry)
+        if: steps.publish.outcome == 'failure'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-build
@@ -95,7 +113,22 @@ jobs:
           name: OrganizeIt-ios-test
           path: OrganizeIt-test.ipa
       - name: Publish test build
+        id: publish
         if: github.ref == 'refs/heads/main'
+        # GitHub's release API sometimes fails for a moment; try once more before failing the build.
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: Test build
+          prerelease: true
+          make_latest: false
+          files: OrganizeIt-test.ipa
+      - name: Wait before retrying publish
+        if: steps.publish.outcome == 'failure'
+        run: sleep 20
+      - name: Publish test build (retry)
+        if: steps.publish.outcome == 'failure'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-build

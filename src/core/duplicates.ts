@@ -17,9 +17,11 @@ import type { Photo } from "./types";
 /** Hashes differing in at most this many of 64 bits are compared in detail. */
 export const MAX_DISTANCE = 3;
 /** Detail of copies differs by at most this much in any 4x4 area (in standard deviations). */
-export const MAX_AREA_DIFFERENCE = 0.1;
+export const MAX_AREA_DIFFERENCE = 0.08;
 /** ...and by at most this much in any single cell. Copies measure around 0.1, a moved arm 1 or more. */
-export const MAX_CELL_DIFFERENCE = 0.45;
+export const MAX_CELL_DIFFERENCE = 0.3;
+/** Photos taken further apart than this are different moments (1 second, for clock rounding). */
+export const SAME_MOMENT_MS = 1000;
 
 export interface DuplicateGroup {
   /** The copies, the one OrganizeIt suggests keeping first. */
@@ -110,6 +112,17 @@ function tooPlain(hash: string): boolean {
   return ones <= 2 || ones >= 62;
 }
 
+/**
+ * Two photos the same size taken at different moments are separate shots, however alike they
+ * look: a burst, or the same pose tried twice in front of the same wall. A copy of one photo
+ * either keeps its moment (Duplicate in Photos, an edit saved as a copy), is the very same file
+ * saved twice, or was resized or re-compressed on the way (shared, downloaded, screenshotted).
+ */
+export function differentMoments(a: Photo, b: Photo): boolean {
+  if (Math.abs(a.takenAt - b.takenAt) <= SAME_MOMENT_MS) return false;
+  return a.width === b.width && a.height === b.height && a.bytes !== b.bytes;
+}
+
 function sameShape(a: Photo, b: Photo): boolean {
   // A video's fingerprint is its opening frame, so a video is only a copy of another video of
   // the same length, never of a photo.
@@ -139,6 +152,7 @@ export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
   };
   const copies = (a: number, b: number) => {
     if (hashDistance(hashed[a].hash!, hashed[b].hash!) > MAX_DISTANCE || !sameShape(hashed[a], hashed[b])) return false;
+    if (differentMoments(hashed[a], hashed[b])) return false;
     const da = detail(a);
     const db = detail(b);
     return !!da && !!db && sameDetail(da, db);
@@ -156,13 +170,26 @@ export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
   });
   const parent = hashed.map((_, i) => i);
   const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+  // Members of each set, so two sets are never joined through a resized copy when they hold
+  // shots from different moments.
+  const members = new Map<number, number[]>(hashed.map((_, i) => [i, [i]]));
+  const join = (a: number, b: number) => {
+    const ra = root(a);
+    const rb = root(b);
+    const ma = members.get(ra)!;
+    const mb = members.get(rb)!;
+    if (ma.some((x) => mb.some((y) => differentMoments(hashed[x], hashed[y])))) return;
+    parent[ra] = rb;
+    members.set(rb, [...mb, ...ma]);
+    members.delete(ra);
+  };
   for (const list of buckets.values()) {
     for (let x = 0; x < list.length; x++) {
       for (let y = x + 1; y < list.length; y++) {
         const a = list[x];
         const b = list[y];
         if (root(a) === root(b)) continue;
-        if (copies(a, b)) parent[root(a)] = root(b);
+        if (copies(a, b)) join(a, b);
       }
     }
   }

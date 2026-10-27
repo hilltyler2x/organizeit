@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { createPortal } from "react-dom";
 import { formatBytes, formatDuration } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
@@ -6,8 +7,9 @@ import { useImageUrl } from "./Thumb";
 
 // Full-screen look at one set of duplicates, to check they really are copies before deleting.
 // Pinch or double-tap to zoom, drag to look around a zoomed photo, and swipe (or use the arrow
-// keys) to go between the copies. Each copy's size, date and time are shown, and it can be
-// switched between Keep and Delete right here.
+// keys) to go between the copies. Each copy's size, date and time are shown, with Close and
+// Delete buttons always at the bottom. Drawn over the whole app (not inside the page), so the
+// app's top bar can't cover it.
 
 const MAX_ZOOM = 6;
 const SWIPE_PX = 60;
@@ -25,7 +27,8 @@ export function DuplicateInspector(props: {
   photos: Photo[];
   start: number;
   keeps: (id: string) => boolean;
-  onToggle: (id: string) => void;
+  onDelete: (photo: Photo) => void;
+  busy: boolean;
   onClose: () => void;
 }) {
   const { photos } = props;
@@ -134,19 +137,11 @@ export function DuplicateInspector(props: {
   const category = props.lib.categories.find((c) => c.id === photo.categoryId)?.name;
   const taken = new Date(photo.takenAt);
 
-  return (
+  return createPortal(
     <div className="inspector" role="dialog" aria-modal="true" aria-label={`Copy ${index + 1} of ${photos.length}`}>
       <div className="inspector-top">
-        <button onClick={props.onClose}>Close</button>
         <span className="inspector-count">Copy {index + 1} of {photos.length}</span>
-        <button
-          className={`inspector-keep ${keep ? "keep" : "delete"}`}
-          aria-pressed={!keep}
-          onClick={() => props.onToggle(photo.id)}
-          title="Switch between Keep and Delete"
-        >
-          {keep ? "Keep" : "Delete"}
-        </button>
+        <span className={`inspector-tag ${keep ? "keep" : "delete"}`}>{keep ? "Keeping" : "Set to delete"}</span>
       </div>
 
       <div
@@ -179,8 +174,13 @@ export function DuplicateInspector(props: {
           <dd>{photo.fileName}</dd>
         </dl>
         <p className="muted small">Pinch or double-tap to zoom. Swipe to see the other copies.</p>
+        <div className="inspector-actions">
+          <button className="big" onClick={props.onClose}>Close</button>
+          <button className="danger big" disabled={props.busy} onClick={() => props.onDelete(photo)}>Delete</button>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

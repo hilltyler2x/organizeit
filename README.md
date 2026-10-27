@@ -53,8 +53,9 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
   turns subscriptions on. `DATABASE_URL` (any Postgres, e.g. a Render Postgres database)
   keeps the photo counts through restarts; without it they live in memory.
   `REVENUECAT_ENTITLEMENT` is the entitlement id (default `organizeit_pro`).
-- App builds: repository variables `REVENUECAT_IOS_KEY` and `REVENUECAT_ANDROID_KEY`
-  (RevenueCat's public app-specific keys) let the app show the store's purchase sheet.
+- App builds: `VITE_REVENUECAT_IOS_KEY` and `VITE_REVENUECAT_ANDROID_KEY` in `.env.app`
+  (RevenueCat's public app-specific keys, safe to ship) let the app show the store's
+  purchase sheet.
 - Each phone is known by an id that survives reinstalling the app (a keychain entry on
   iPhone, `ANDROID_ID` on Android), which is also its RevenueCat user id. "Restore purchases"
   moves a subscription to a new phone.

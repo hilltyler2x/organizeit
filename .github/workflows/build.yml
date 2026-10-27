@@ -13,12 +13,6 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
-# RevenueCat's public SDK keys for the in-app subscription (Settings > Secrets and variables >
-# Actions > Variables). Builds without them still work; they just can't sell the subscription.
-env:
-  VITE_REVENUECAT_IOS_KEY: ${{ vars.REVENUECAT_IOS_KEY }}
-  VITE_REVENUECAT_ANDROID_KEY: ${{ vars.REVENUECAT_ANDROID_KEY }}
-
 jobs:
   test:
     runs-on: ubuntu-latest

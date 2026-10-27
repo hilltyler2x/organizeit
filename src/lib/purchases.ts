@@ -4,8 +4,8 @@ import { PhotoLibrary, isNativeApp } from "./photoLibrary";
 
 // Subscriptions are bought through the App Store or Google Play inside the iOS/Android app.
 // RevenueCat (revenuecat.com) talks to both stores; the server asks it whether someone is
-// subscribed. Its public SDK keys come from the build (VITE_REVENUECAT_IOS_KEY,
-// VITE_REVENUECAT_ANDROID_KEY), so they can be added without changing code.
+// subscribed. Its public SDK keys come from .env.app (VITE_REVENUECAT_IOS_KEY,
+// VITE_REVENUECAT_ANDROID_KEY).
 
 const STORE_KEYS: Record<string, string | undefined> = {
   ios: import.meta.env.VITE_REVENUECAT_IOS_KEY,

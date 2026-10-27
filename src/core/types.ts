@@ -49,6 +49,13 @@ export interface Photo {
   error?: string;
   /** The device marked this as a screenshot, a strong hint for business expenses. */
   isScreenshot?: boolean;
+  /**
+   * A video rather than a still photo. Videos are sorted from a few frames taken across the
+   * clip, into the same categories as photos, and count toward the same storage totals.
+   */
+  isVideo?: boolean;
+  /** Length of a video in milliseconds. */
+  durationMs?: number;
   /** Where the photo came from, so a native build can act on the original asset. */
   source: { kind: "file" } | { kind: "native"; assetId: string };
 }

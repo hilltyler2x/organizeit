@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { categoriesWithNew, needsPerson } from "../core/library";
-import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
+import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
@@ -64,7 +64,7 @@ export function App() {
         {!lib.native && (
           <>
             <button className="hide-small" onClick={() => add(true)}>Add folder</button>
-            <button className="primary" onClick={() => add()}>Add photos</button>
+            <button className="primary" onClick={() => add()}>Add photos &amp; videos</button>
           </>
         )}
       </header>
@@ -157,10 +157,10 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
             photos by exact item type. Anything new gets its own category, never a catch-all.
           </p>
           <div className="row">
-            <button className="primary big" onClick={() => onAdd()}>Add photos</button>
+            <button className="primary big" onClick={() => onAdd()}>Add photos &amp; videos</button>
             <button className="big hide-small" onClick={() => onAdd(true)}>Add a folder</button>
           </div>
-          <p className="muted small">On iPhone or Android, "Add photos" opens your Photos library. Photos stay on this device; only a small preview is sent for sorting.</p>
+          <p className="muted small">On iPhone or Android, "Add photos &amp; videos" opens your Photos library. Everything stays on this device; only a small preview is sent for sorting (a few still frames for a video).</p>
         </div>
       ) : (
         <>
@@ -169,7 +169,7 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
               <div key={s.id} className="stat">
                 <p className="eyebrow">{s.label}</p>
                 <p className="stat-value">{formatBytes(sections[s.id].bytes)}</p>
-                <p className="muted">{sections[s.id].count} photo{sections[s.id].count === 1 ? "" : "s"}</p>
+                <p className="muted">{countLabel(sections[s.id].count - sections[s.id].videos, sections[s.id].videos)}</p>
               </div>
             ))}
           </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { categoryMatchKey, tidyCategoryName } from "../core/categories";
 import { needsPerson } from "../core/library";
-import { formatBytes } from "../core/storage";
+import { countItems, formatBytes } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
@@ -75,7 +75,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     const ids = list.map((p) => p.id);
     const bytes = list.reduce((n, p) => n + p.bytes, 0);
     // In the app the phone shows its own delete confirmation.
-    if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(bytes)}) from OrganizeIt?`)) return;
+    if (!lib.native && !confirm(`Delete ${countItems(list)} (${formatBytes(bytes)}) from OrganizeIt?`)) return;
     run(async () => {
       const deleted = await lib.remove(ids);
       if (!deleted) return;

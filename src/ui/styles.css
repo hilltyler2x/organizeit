@@ -158,6 +158,15 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
 .grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
 .tile { position: relative; padding: 0; border: none; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 10px; background: var(--surface-2); display: block; }
 .tile img, .thumb-placeholder { width: 100%; height: 100%; object-fit: cover; }
+.mini-grid li, .move-preview li { position: relative; }
+.video-badge {
+  position: absolute; left: 6px; top: 6px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px 2px 4px;
+  border-radius: 99px; background: rgb(0 0 0 / 0.55); color: #fff; font-size: 0.72rem; font-weight: 600; line-height: 1.4;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.video-badge svg { width: 12px; height: 12px; }
+.mini-grid .video-badge, .move-preview:not(.single) .video-badge { left: 3px; top: 3px; padding: 2px; }
+.mini-grid .video-length, .move-preview:not(.single) .video-length { display: none; }
 .grid li.selected .tile { outline: 3px solid var(--accent); outline-offset: -3px; }
 .grid li.selected img { opacity: 0.8; }
 .check {
@@ -236,7 +245,9 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
 .new-category .error { font-size: 0.85rem; margin: 6px 0 0; }
 .viewer { background: var(--surface); border-radius: 16px; overflow: hidden; display: grid; grid-template-columns: 1fr 320px; width: min(1100px, 100%); max-height: 100%; box-shadow: var(--shadow); }
 .viewer-image { background: #000; display: grid; place-items: center; min-height: 300px; }
-.viewer-image img { max-width: 100%; max-height: 85vh; max-height: 85dvh; object-fit: contain; }
+.viewer-image img, .viewer-image video { max-width: 100%; max-height: 85vh; max-height: 85dvh; object-fit: contain; }
+.viewer-image video { width: 100%; background: #000; }
+.viewer-image .video-wait { color: #fff; opacity: 0.8; font-size: 0.9rem; }
 .viewer-info { padding: 20px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .viewer-info dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 0.9rem; margin: 16px 0; }
 .viewer-info dt { color: var(--muted); }
@@ -277,7 +288,7 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
   .tile { border-radius: 4px; }
   .caption { display: none; }
   .viewer { grid-template-columns: 1fr; }
-  .viewer-image img { max-height: 55vh; max-height: 55dvh; }
+  .viewer-image img, .viewer-image video { max-height: 55vh; max-height: 55dvh; }
 }
 
 /* To review: a to-do list for photos the AI wasn't sure about, not a category. */

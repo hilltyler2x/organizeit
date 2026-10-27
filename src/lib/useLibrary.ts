@@ -19,10 +19,27 @@ import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
+import { readVideo } from "./video";
 import { PhotoLibrary, canMakeAlbums, deviceDeleteTarget, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
-import type { PickedPhoto } from "./photoSource";
+import { isVideoType, type PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
+
+const ASKED_VIDEOS_KEY = "organizeit.askedForVideos";
+function askedForVideos(): boolean {
+  try {
+    return localStorage.getItem(ASKED_VIDEOS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function rememberAskedForVideos() {
+  try {
+    localStorage.setItem(ASKED_VIDEOS_KEY, "1");
+  } catch {
+    // Private storage unavailable: asked again next time, which is harmless.
+  }
+}
 // Optional cap while testing: only the newest N photos on the phone are sorted.
 export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 // Photos go to the server several at a time, with a few requests in flight at once.
@@ -186,6 +203,7 @@ export function useLibrary() {
           width: photo.width,
           height: photo.height,
           isScreenshot: photo.isScreenshot ?? false,
+          ...(photo.isVideo ? { isVideo: true, durationSec: Math.round((photo.durationMs ?? 0) / 1000) } : {}),
         })),
         categories: stateRef.current.categories,
         lessons: lessonsForPrompt(lessonsRef.current, stateRef.current.categories),
@@ -297,7 +315,13 @@ export function useLibrary() {
     scanning.current = true;
     rescan.current = false;
     try {
-      const { status } = await PhotoLibrary.checkPermission();
+      let { status, videos } = await PhotoLibrary.checkPermission();
+      // Android asks for photos and videos separately. Someone who allowed photos before
+      // videos were sorted too is asked once for videos.
+      if (status === "granted" && videos === false && !askedForVideos()) {
+        rememberAskedForVideos();
+        ({ status } = await PhotoLibrary.requestPermission());
+      }
       setPermission(status);
       if (status !== "granted" && status !== "limited") return;
       setScan({ done: 0, total: 0 });
@@ -399,7 +423,8 @@ export function useLibrary() {
     }
     await commit(removePhotos(stateRef.current, ids));
     const target = assetIds.length ? deviceDeleteTarget : "organizeit";
-    return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target);
+    const videos = chosen.filter((p) => p.isVideo).length;
+    return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target, videos);
   }, [commit]);
 
   /** Clears a category's "new" dot once the person has opened it. */
@@ -420,19 +445,29 @@ export function useLibrary() {
   const importPhotos = useCallback(async (picked: PickedPhoto[]) => {
     for (const item of picked) {
       try {
-        const { width, height, bitmap } = await decode(item.file);
-        const thumb = await resize(bitmap, 480, 0.78);
-        bitmap.close();
+        const video = isVideoType(item.type) ? await readVideo(item.file, 480) : null;
+        let size: { width: number; height: number };
+        let thumb: Blob;
+        if (video) {
+          size = video;
+          thumb = video.poster;
+        } else {
+          const { width, height, bitmap } = await decode(item.file);
+          size = { width, height };
+          thumb = await resize(bitmap, 480, 0.78);
+          bitmap.close();
+        }
         const photo: Photo = {
           id: newId(),
           fileName: item.name,
           mimeType: item.type,
           bytes: item.file.size,
-          width,
-          height,
+          width: size.width,
+          height: size.height,
           takenAt: item.lastModified,
           importedAt: Date.now(),
           status: "queued",
+          ...(video ? { isVideo: true, durationMs: video.durationMs } : {}),
           source: item.source,
         };
         await store.addPhoto(photo, item.file, thumb);
@@ -440,7 +475,7 @@ export function useLibrary() {
         stateRef.current = { ...s, photos: [...s.photos, photo] };
         setState(stateRef.current);
       } catch {
-        console.warn(`Skipped ${item.name}: this browser cannot read that image format.`);
+        console.warn(`Skipped ${item.name}: this browser cannot read that format.`);
       }
     }
   }, []);

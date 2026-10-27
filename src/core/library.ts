@@ -2,7 +2,7 @@ import { emptyCreatedCategories } from "./storage";
 import { isBannedCategoryName, resolveCategory } from "./categories";
 import type { Category, Classification, Photo, Section } from "./types";
 
-/** One photo as the device's photo library reports it. */
+/** One photo or video as the device's photo library reports it. */
 export interface DeviceAsset {
   id: string;
   fileName: string;
@@ -12,6 +12,8 @@ export interface DeviceAsset {
   bytes: number;
   mimeType: string;
   isScreenshot: boolean;
+  isVideo?: boolean;
+  durationMs?: number;
 }
 
 // Pure state transitions for the photo library. The UI layer persists the results.
@@ -205,6 +207,7 @@ export function syncWithDevice(state: LibraryState, assets: DeviceAsset[], newId
       importedAt: now,
       status: "queued",
       isScreenshot: a.isScreenshot,
+      ...(a.isVideo ? { isVideo: true, durationMs: a.durationMs } : {}),
       source: { kind: "native", assetId: a.id },
     }));
   const goneIds = new Set(gone);

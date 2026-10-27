@@ -8,11 +8,18 @@ import type { DeleteTarget } from "../core/storage";
 export type PermissionStatus = "granted" | "limited" | "denied" | "prompt";
 
 interface PhotoLibraryPlugin {
-  checkPermission(): Promise<{ status: PermissionStatus }>;
-  requestPermission(): Promise<{ status: PermissionStatus }>;
+  /** `videos` is false on Android when photos are allowed but videos aren't (yet). */
+  checkPermission(): Promise<{ status: PermissionStatus; videos?: boolean }>;
+  requestPermission(): Promise<{ status: PermissionStatus; videos?: boolean }>;
   openSettings(): Promise<void>;
   list(options: { offset: number; limit: number }): Promise<{ assets: DeviceAsset[]; total: number; nextOffset: number | null }>;
-  getImage(options: { id: string; maxSide: number; quality?: number }): Promise<{ data: string; width: number; height: number }>;
+  /**
+   * A JPEG of a photo, or of a video's opening frame. With `frames`, a video comes back as four
+   * frames from across the clip in a 2×2 grid instead, for sorting.
+   */
+  getImage(options: { id: string; maxSide: number; quality?: number; frames?: boolean }): Promise<{ data: string; width: number; height: number }>;
+  /** Where a video can be played from: a file path (iOS) or content URI (Android). */
+  getVideo(options: { id: string }): Promise<{ path: string }>;
   deleteAssets(options: { ids: string[] }): Promise<{ deleted: boolean }>;
   /** Fires the moment photos are added to or removed from the library while the app runs. */
   addListener(event: "libraryChanged", listener: (info: { added?: number }) => void): Promise<PluginListenerHandle>;

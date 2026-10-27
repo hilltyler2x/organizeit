@@ -16,13 +16,14 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "list", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getImage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getVideo", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "deleteAssets", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addToAlbum", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "copyImage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareImage", returnType: CAPPluginReturnPromise)
     ]
 
-    /// All images, kept to tell photos being added or removed apart from other library changes.
+    /// All images and videos, kept to tell ones being added or removed apart from other library changes.
     private var watched: PHFetchResult<PHAsset>?
 
     override public func load() {
@@ -39,7 +40,7 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
     private func watchLibrary() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard watched == nil, status == .authorized || status == .limited else { return }
-        watched = PHAsset.fetchAssets(with: .image, options: nil)
+        watched = PHAsset.fetchAssets(with: VideoFrames.mediaOptions())
         PHPhotoLibrary.shared().register(self)
     }
 
@@ -83,14 +84,14 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
         }
     }
 
-    /// Pages through every image in the library, oldest first.
+    /// Pages through every photo and video in the library, oldest first.
     @objc func list(_ call: CAPPluginCall) {
         let offset = max(0, call.getInt("offset", 0))
         let limit = max(1, min(call.getInt("limit", 500), 2000))
         DispatchQueue.global(qos: .userInitiated).async {
-            let options = PHFetchOptions()
+            let options = VideoFrames.mediaOptions()
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-            let result = PHAsset.fetchAssets(with: .image, options: options)
+            let result = PHAsset.fetchAssets(with: options)
             let end = min(result.count, offset + limit)
             var assets: [[String: Any]] = []
             if offset < end {
@@ -108,13 +109,23 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
         DeviceAsset(asset).dictionary
     }
 
-    /// Returns a JPEG copy of a photo scaled so its longest side is at most `maxSide`.
+    /// Returns a JPEG copy of a photo scaled so its longest side is at most `maxSide`. For a
+    /// video it is the opening frame or, with `frames`, four frames from across it in a grid.
     @objc func getImage(_ call: CAPPluginCall) {
         guard let id = call.getString("id") else { return call.reject("Missing id") }
         let maxSide = CGFloat(max(64, call.getInt("maxSide", 1024)))
         let quality = CGFloat(call.getDouble("quality", 0.8))
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else {
             return call.reject("Photo not found", "NOT_FOUND")
+        }
+        if asset.mediaType == .video && call.getBool("frames", false) {
+            Task {
+                guard let sheet = await VideoFrames.sheet(for: asset, maxSide: maxSide, quality: quality, download: true) else {
+                    return call.reject("Could not load video")
+                }
+                call.resolve(["data": sheet.0.base64EncodedString(), "width": Int(sheet.1.width), "height": Int(sheet.1.height)])
+            }
+            return
         }
         let scale = min(1, maxSide / CGFloat(max(asset.pixelWidth, asset.pixelHeight, 1)))
         let target = CGSize(width: CGFloat(asset.pixelWidth) * scale, height: CGFloat(asset.pixelHeight) * scale)
@@ -131,6 +142,21 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
                 "width": Int(image.size.width * image.scale),
                 "height": Int(image.size.height * image.scale)
             ])
+        }
+    }
+
+    /// Copies a video somewhere the app's web view can play it from, downloading it from iCloud
+    /// if needed, and returns that file's path.
+    @objc func getVideo(_ call: CAPPluginCall) {
+        guard let id = call.getString("id") else { return call.reject("Missing id") }
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject, asset.mediaType == .video else {
+            return call.reject("That video is no longer on this phone", "NOT_FOUND")
+        }
+        VideoFrames.playableFile(for: asset) { result in
+            switch result {
+            case .success(let file): call.resolve(["path": file.path])
+            case .failure(let error): call.reject("Could not load video: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -194,7 +220,20 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
     }
 
     /// Copies a photo so it can be pasted into Messages, Notes and other apps, like Copy in Photos.
+    /// A video is copied as the movie file.
     @objc func copyImage(_ call: CAPPluginCall) {
+        if let asset = videoAsset(call) {
+            return VideoFrames.playableFile(for: asset) { result in
+                guard case .success(let file) = result, let data = try? Data(contentsOf: file) else {
+                    return call.reject("Could not copy video")
+                }
+                let type = UTType(filenameExtension: file.pathExtension) ?? .movie
+                DispatchQueue.main.async {
+                    UIPasteboard.general.setData(data, forPasteboardType: type.identifier)
+                    call.resolve()
+                }
+            }
+        }
         originalData(call) { _, data, _ in
             DispatchQueue.main.async {
                 guard let image = UIImage(data: data) else { return call.reject("Could not copy photo") }
@@ -207,6 +246,12 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
     /// Opens the iOS share sheet for a photo (AirDrop, Messages, Save Image, Copy and the rest).
     /// Resolves with completed: false if the person closes it without sharing.
     @objc func shareImage(_ call: CAPPluginCall) {
+        if let asset = videoAsset(call) {
+            return VideoFrames.playableFile(for: asset) { result in
+                guard case .success(let file) = result else { return call.reject("Could not share video") }
+                self.presentShareSheet(file, call)
+            }
+        }
         originalData(call) { asset, data, uti in
             let original = PHAssetResource.assetResources(for: asset).first?.originalFilename
             let ext = uti.flatMap { UTType($0)?.preferredFilenameExtension } ?? "jpg"
@@ -220,18 +265,30 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
             } catch {
                 return call.reject("Could not share photo")
             }
-            DispatchQueue.main.async {
-                guard let host = self.bridge?.viewController else { return call.reject("Could not share photo") }
-                let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
-                // iPad shows the sheet as a popover, which needs a place to point at.
-                sheet.popoverPresentationController?.sourceView = host.view
-                sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)
-                sheet.popoverPresentationController?.permittedArrowDirections = []
-                sheet.completionWithItemsHandler = { _, completed, _, _ in
-                    call.resolve(["completed": completed])
-                }
-                host.present(sheet, animated: true)
+            self.presentShareSheet(file, call)
+        }
+    }
+
+    /// The video asset a call names, or nil for a photo (or a missing id, which the photo path reports).
+    private func videoAsset(_ call: CAPPluginCall) -> PHAsset? {
+        guard let id = call.getString("id"),
+              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject,
+              asset.mediaType == .video else { return nil }
+        return asset
+    }
+
+    private func presentShareSheet(_ file: URL, _ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let host = self.bridge?.viewController else { return call.reject("Could not share photo") }
+            let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+            // iPad shows the sheet as a popover, which needs a place to point at.
+            sheet.popoverPresentationController?.sourceView = host.view
+            sheet.popoverPresentationController?.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)
+            sheet.popoverPresentationController?.permittedArrowDirections = []
+            sheet.completionWithItemsHandler = { _, completed, _, _ in
+                call.resolve(["completed": completed])
             }
+            host.present(sheet, animated: true)
         }
     }
 }

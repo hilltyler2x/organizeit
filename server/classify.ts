@@ -19,6 +19,9 @@ const PhotoInput = z.object({
   width: z.number().int().nonnegative().default(0),
   height: z.number().int().nonnegative().default(0),
   isScreenshot: z.boolean().default(false),
+  // A video arrives as one image holding four frames from across the clip.
+  isVideo: z.boolean().default(false),
+  durationSec: z.number().nonnegative().max(1_000_000).optional(),
 });
 type PhotoInput = z.infer<typeof PhotoInput>;
 
@@ -95,6 +98,8 @@ Then pick one category inside that section:
 - Never answer with a catch-all such as Other, Misc, Miscellaneous, Uncategorized, Unknown, General, Assorted, or Various, and never prefix a name with them. Even when unsure, name the most specific kind of thing you can see.
 - Product categories are by item type, not brand or color.
 
+Some items are videos. A video is shown as one image with four frames taken across the clip, in a 2x2 grid in time order (left to right, then top to bottom). Sort a video by what the clip as a whole shows, into the same sections and categories as photos: a video of a sneaker goes in Sneakers, a screen recording of a checkout goes in business. Don't make a category just because something is a video (never Videos, Clips or Screen Recordings).
+
 The label is a few words describing the specific thing shown.
 
 Confidence is between 0 and 1 and decides whether the person is asked to check your answer. Give below 0.6 when you can't really tell: the item is blurry, cut off or hidden, it could belong to two categories, or it isn't clear whether a screenshot is a business expense. Even then, give your best specific guess.
@@ -121,6 +126,10 @@ function hints(req: PhotoInput): string {
   if (req.fileName) parts.push(`File name: ${req.fileName}`);
   if (req.width && req.height) parts.push(`Original size: ${req.width}x${req.height}`);
   if (req.isScreenshot) parts.push("The phone marked this photo as a screenshot.");
+  if (req.isVideo) {
+    const length = req.durationSec ? ` (${Math.round(req.durationSec)} seconds long)` : "";
+    parts.push(`This is a video${length}. The image shows four frames from across it in a 2x2 grid.`);
+  }
   return parts.join("\n");
 }
 

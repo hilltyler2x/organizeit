@@ -50,6 +50,13 @@ export interface Photo {
   /** The device marked this as a screenshot, a strong hint for business expenses. */
   isScreenshot?: boolean;
   /**
+   * A video rather than a still photo. Videos are sorted from a few frames taken across the
+   * clip, into the same categories as photos, and count toward the same storage totals.
+   */
+  isVideo?: boolean;
+  /** Length of a video in milliseconds. */
+  durationMs?: number;
+  /**
    * Fingerprint of what the photo looks like (16 hex digits), used to spot duplicates. Not set
    * until worked out; an empty string means the image couldn't be read.
    */

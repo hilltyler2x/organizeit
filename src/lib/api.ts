@@ -104,6 +104,9 @@ export type PhotoForClassifier = {
   width: number;
   height: number;
   isScreenshot: boolean;
+  /** The image is a grid of frames from a video. */
+  isVideo?: boolean;
+  durationSec?: number;
 };
 
 /**

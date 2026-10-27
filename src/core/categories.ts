@@ -17,7 +17,8 @@ const BANNED_NAMES = new Set([
   "other", "others", "misc", "miscellaneous", "uncategorized", "uncategorised", "unsorted",
   "unknown", "unclassified", "unidentified", "general", "generic", "various", "assorted",
   "random", "stuff", "things", "item", "items", "product", "products", "photo", "photos",
-  "image", "images", "picture", "pictures", "none", "na", "n a", "tbd", "todo", "to sort",
+  "image", "images", "picture", "pictures", "video", "videos", "clip", "clips", "video clips",
+  "recordings", "footage", "media", "none", "na", "n a", "tbd", "todo", "to sort",
   "everything else", "rest", "leftovers", "extras", "more", "new", "new category",
   "category", "default", "mixed", "personal", "business", "business expenses",
 ]);

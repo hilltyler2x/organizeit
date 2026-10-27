@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isBannedCategoryName } from "../core/categories";
-import { formatBytes } from "../core/storage";
+import { countItems, formatBytes } from "../core/storage";
 import { SECTIONS, type Category, type Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { AlbumDialog } from "./AlbumDialog";
@@ -71,9 +71,10 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
 
   const deletePhotos = (ids: string[]) => {
     const idSet = new Set(ids);
-    const size = photos.filter((p) => idSet.has(p.id)).reduce((n, p) => n + p.bytes, 0);
+    const chosen = photos.filter((p) => idSet.has(p.id));
+    const size = chosen.reduce((n, p) => n + p.bytes, 0);
     // In the app the phone shows its own delete confirmation.
-    if (!lib.native && !confirm(`Delete ${ids.length} photo${ids.length === 1 ? "" : "s"} (${formatBytes(size)}) from OrganizeIt?`)) return;
+    if (!lib.native && !confirm(`Delete ${countItems(chosen)} (${formatBytes(size)}) from OrganizeIt?`)) return;
     run(async () => {
       const lastOnes = ids.length === photos.length && !category.seeded;
       const deleted = await lib.remove(ids);
@@ -127,7 +128,7 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
             </h1>
           )}
           <p className="muted">
-            {photos.length} photo{photos.length === 1 ? "" : "s"} · {formatBytes(bytes)}
+            {countItems(photos)} · {formatBytes(bytes)}
           </p>
         </div>
         {photos.length > 0 && (
@@ -147,8 +148,8 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
 
       {photos.length === 0 ? (
         <div className="empty">
-          <p>No photos in {category.name} yet.</p>
-          <p className="muted">Add photos and OrganizeIt files matching ones here automatically.</p>
+          <p>Nothing in {category.name} yet.</p>
+          <p className="muted">Add photos or videos and OrganizeIt files matching ones here automatically.</p>
         </div>
       ) : (
         <ul className="grid">

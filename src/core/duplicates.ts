@@ -59,6 +59,10 @@ function tooPlain(hash: string): boolean {
 }
 
 function sameShape(a: Photo, b: Photo): boolean {
+  // A video's fingerprint is its opening frame, so a video is only a copy of another video of
+  // the same length, never of a photo.
+  if (Boolean(a.isVideo) !== Boolean(b.isVideo)) return false;
+  if (a.isVideo && Math.abs((a.durationMs ?? 0) - (b.durationMs ?? 0)) > 1000) return false;
   if (!a.width || !a.height || !b.width || !b.height) return true;
   const ra = a.width / a.height;
   const rb = b.width / b.height;

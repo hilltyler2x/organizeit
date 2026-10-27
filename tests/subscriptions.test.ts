@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../server/index";
+import { memoryOwners } from "../server/passcodes";
 import { cached, memoryUsage, planFrom, revenueCat, type Plan, type SubscriptionOptions } from "../server/subscriptions";
 
 const answer = { section: "products", category: "Bags", label: "tote bag", confidence: 0.9 };
@@ -79,11 +80,19 @@ describe("subscriptions", () => {
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100" }, single)).status).toBe(429);
   });
 
-  it("only takes the passcode from the owner's phones when they are listed", async () => {
-    const app = createApp(client, { passcode: "1100", subscriptions: subs({}), ownerPhones: ["ios-owner"] });
-    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-owner") }, single)).status).toBe(200);
+  it("gives each passcode to the first phone that uses it, and no one else", async () => {
+    const app = createApp(client, { passcode: "1100, 2200", subscriptions: subs({}), owners: memoryOwners() });
+    const unlock = (code: string, phone?: string) =>
+      call(app, "POST", "/api/unlock", { "x-organizeit-passcode": code, ...(phone ? user(phone) : {}) });
+    expect((await unlock("1100")).status).toBe(401);
+    expect((await unlock("1100", "ios-owner-phone")).status).toBe(200);
+    expect((await unlock("1100", "ios-owner-phone")).status).toBe(200);
+    expect((await unlock("1100", "ios-stranger")).status).toBe(401);
+    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-owner-phone") }, single)).status).toBe(200);
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-stranger") }, single)).status).toBe(402);
-    expect((await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": "1100" })).status).toBe(401);
+    // A second passcode for a second phone.
+    expect((await unlock("2200", "android-new-phone")).status).toBe(200);
+    expect((await unlock("2200", "ios-owner-phone")).status).toBe(401);
   });
 
   it("still lets the passcode sort without a subscription", async () => {

@@ -3,7 +3,7 @@ import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
-import { API, currentUserId } from "../lib/api";
+import { API } from "../lib/api";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
@@ -522,7 +522,6 @@ function PasscodeForm({ lib }: { lib: Library }) {
         <button className="primary" type="submit" disabled={!code.trim() || state === "checking"}>Unlock</button>
       </div>
       {state === "wrong" && <p className="error small">{problem ?? "That passcode didn't work."}</p>}
-      {lib.subscriptions && currentUserId() && <p className="muted small">This phone: {currentUserId()}</p>}
     </form>
   );
 }

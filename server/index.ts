@@ -4,9 +4,11 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClassifyBatchRequest, ClassifyError, ClassifyRequest, classifyBatch, classifyPhoto } from "./classify";
+import { memoryOwners, postgresOwners, type PasscodeOwners } from "./passcodes";
 import {
   PlanUnavailable,
   cached,
+  connectPostgres,
   freeKey,
   limitFor,
   memoryUsage,
@@ -32,23 +34,32 @@ const TOO_MANY_WRONG = "Too many wrong passcodes. Try again in an hour.";
 /**
  * Checks the passcode a request carries. After MAX_WRONG_PASSCODES wrong tries in an hour an
  * address is shut out for the rest of that hour, even with the right one, so a short passcode
- * can't be found by trying them all.
+ * can't be found by trying them all. With `owners`, each passcode works only on the phone that
+ * first unlocked with it (never the website, which has no phone id).
  */
-function passcodeChecker(passcode: string | undefined, ownerPhones: string[] = []) {
+function passcodeChecker(passcodes: string[], owners?: PasscodeOwners) {
   const wrong = new Map<string, { start: number; count: number }>();
-  return (req: Parameters<RequestHandler>[0]): "none" | "ok" | "wrong" | "blocked" => {
+  return async (req: Parameters<RequestHandler>[0]): Promise<"none" | "ok" | "wrong" | "blocked" | "unavailable"> => {
     const given = String(req.get("x-organizeit-passcode") ?? "");
-    if (!passcode || !given) return "none";
+    if (!passcodes.length || !given) return "none";
     const key = req.ip ?? "unknown";
     const now = Date.now();
     let w = wrong.get(key);
     if (w && now - w.start > 3_600_000) wrong.delete(key), (w = undefined);
     if (w && w.count >= MAX_WRONG_PASSCODES) return "blocked";
-    if (sameSecret(given, passcode)) {
-      // With OWNER_PHONE_IDS set, the passcode only works from those phones.
+    const code = passcodes.find((p) => sameSecret(given, p));
+    if (code) {
+      if (!owners) return "ok";
       const phone = String(req.get("x-organizeit-user") ?? "");
-      if (!ownerPhones.length || ownerPhones.includes(phone)) return "ok";
-      console.log(`Right passcode from a phone not in OWNER_PHONE_IDS: ${phone || "(the website)"}`);
+      if (validUserId(phone)) {
+        try {
+          if ((await owners.claim(code, phone)) === phone) return "ok";
+        } catch (err) {
+          console.error("Couldn't check who owns the passcode:", err);
+          return "unavailable";
+        }
+      }
+      console.log(`Right passcode from a phone that doesn't own it: ${phone || "(the website)"}`);
     }
     if (!w) {
       if (wrong.size > 100_000) wrong.clear();
@@ -63,12 +74,16 @@ type PasscodeCheck = ReturnType<typeof passcodeChecker>;
 // When APP_PASSCODE is set (always, for a public deployment), only people with the
 // passcode can spend the server's Anthropic credits.
 function requirePasscode(passcode: string | undefined, check: PasscodeCheck): RequestHandler {
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (!passcode) return next();
-    const result = check(req);
+    const result = await check(req);
     if (result === "ok") return next();
     if (result === "blocked") {
       res.status(429).json({ error: TOO_MANY_WRONG });
+      return;
+    }
+    if (result === "unavailable") {
+      res.status(503).json({ error: "Couldn't check the passcode. Try again in a moment." });
       return;
     }
     res.status(401).json({ error: "Enter the OrganizeIt passcode to sort photos." });
@@ -95,10 +110,14 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
     return true;
   };
   return async (req, res, next) => {
-    const given = check(req);
+    const given = await check(req);
     if (given === "ok") return next();
     if (given === "blocked") {
       res.status(429).json({ error: TOO_MANY_WRONG });
+      return;
+    }
+    if (given === "unavailable") {
+      res.status(502).json({ error: "Couldn't check the passcode. Trying again shortly.", reason: "plan-check" });
       return;
     }
     if (!subs) {
@@ -190,13 +209,14 @@ const allowApp: RequestHandler = (req, res, next) => {
 
 export function createApp(
   client: Anthropic | null,
-  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions; ownerPhones?: string[] } = {},
+  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions; owners?: PasscodeOwners } = {},
 ) {
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
   app.use(express.json({ limit: "25mb" }));
-  const check = passcodeChecker(options.passcode || undefined, options.ownerPhones);
+  const passcodes = (options.passcode ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  const check = passcodeChecker(passcodes, options.owners);
   const gate = requirePasscode(options.passcode || undefined, check);
   const subs = options.subscriptions;
   const access = requireAccess(options.passcode || undefined, subs, check);
@@ -283,16 +303,17 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPat
 if (isMain) {
   const hasKey = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
   const rcKey = process.env.REVENUECAT_SECRET_KEY;
+  // A database that can't be reached doesn't stop the server; it falls back to memory.
+  const db = process.env.DATABASE_URL
+    ? await connectPostgres(process.env.DATABASE_URL).catch((err) => {
+        console.error("Couldn't use DATABASE_URL, keeping photo counts and passcode owners in memory:", err.message);
+        return null;
+      })
+    : null;
   const subscriptions: SubscriptionOptions | undefined = rcKey
     ? {
         plans: cached(revenueCat(rcKey, process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro")),
-        // A database that can't be reached doesn't stop the server; counts fall back to memory.
-        usage: process.env.DATABASE_URL
-          ? await postgresUsage(process.env.DATABASE_URL).catch((err) => {
-              console.error("Couldn't use DATABASE_URL, keeping photo counts in memory:", err.message);
-              return memoryUsage();
-            })
-          : memoryUsage(),
+        usage: db ? await postgresUsage(db) : memoryUsage(),
         freeLimit: Number(process.env.FREE_SORT_LIMIT ?? 100),
         introLimit: Number(process.env.INTRO_SORT_LIMIT ?? 2000),
         monthlyLimit: Number(process.env.MONTHLY_SORT_LIMIT ?? 0),
@@ -300,7 +321,7 @@ if (isMain) {
     : undefined;
   const app = createApp(hasKey ? new Anthropic() : null, {
     passcode: process.env.APP_PASSCODE,
-    ownerPhones: (process.env.OWNER_PHONE_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean),
+    owners: db ? await postgresOwners(db) : memoryOwners(),
     perHour: Number(process.env.SORTS_PER_HOUR ?? 10_000),
     subscriptions,
   });

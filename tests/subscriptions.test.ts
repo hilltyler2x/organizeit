@@ -79,6 +79,13 @@ describe("subscriptions", () => {
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100" }, single)).status).toBe(429);
   });
 
+  it("only takes the passcode from the owner's phones when they are listed", async () => {
+    const app = createApp(client, { passcode: "1100", subscriptions: subs({}), ownerPhones: ["ios-owner"] });
+    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-owner") }, single)).status).toBe(200);
+    expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-stranger") }, single)).status).toBe(402);
+    expect((await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": "1100" })).status).toBe(401);
+  });
+
   it("still lets the passcode sort without a subscription", async () => {
     const app = createApp(client, { passcode: "s3cret", subscriptions: subs({}) });
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "s3cret" }, single)).status).toBe(200);

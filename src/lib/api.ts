@@ -107,8 +107,9 @@ export async function subscriptionStatus(fresh = false): Promise<Subscription | 
 export async function unlock(candidate: string): Promise<boolean> {
   const r = await fetch(`${API}/api/unlock`, {
     method: "POST",
-    headers: { "x-organizeit-passcode": candidate },
+    headers: { "x-organizeit-passcode": candidate, ...(userId ? { "x-organizeit-user": userId } : {}) },
   });
+  if (r.status === 429) throw new ApiError("Too many wrong tries. Try again in an hour.", 429);
   if (!r.ok) return false;
   passcode = candidate;
   try {

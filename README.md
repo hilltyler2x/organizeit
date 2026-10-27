@@ -60,7 +60,9 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
   iPhone, `ANDROID_ID` on Android), which is also its RevenueCat user id. "Restore purchases"
   moves a subscription to a new phone.
 - The passcode still sorts without a subscription (the website, and the owner via
-  "Have a passcode?" on the subscribe screen).
+  "Have a passcode?" on the subscribe screen). After 10 wrong passcodes in an hour an address
+  is shut out for the rest of the hour. `OWNER_PHONE_IDS` (comma-separated; each phone's id
+  shows under the passcode box) limits the passcode to those phones.
 
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
 

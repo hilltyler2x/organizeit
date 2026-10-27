@@ -34,7 +34,7 @@ const TOO_MANY_WRONG = "Too many wrong passcodes. Try again in an hour.";
  * address is shut out for the rest of that hour, even with the right one, so a short passcode
  * can't be found by trying them all.
  */
-function passcodeChecker(passcode: string | undefined) {
+function passcodeChecker(passcode: string | undefined, ownerPhones: string[] = []) {
   const wrong = new Map<string, { start: number; count: number }>();
   return (req: Parameters<RequestHandler>[0]): "none" | "ok" | "wrong" | "blocked" => {
     const given = String(req.get("x-organizeit-passcode") ?? "");
@@ -44,7 +44,12 @@ function passcodeChecker(passcode: string | undefined) {
     let w = wrong.get(key);
     if (w && now - w.start > 3_600_000) wrong.delete(key), (w = undefined);
     if (w && w.count >= MAX_WRONG_PASSCODES) return "blocked";
-    if (sameSecret(given, passcode)) return "ok";
+    if (sameSecret(given, passcode)) {
+      // With OWNER_PHONE_IDS set, the passcode only works from those phones.
+      const phone = String(req.get("x-organizeit-user") ?? "");
+      if (!ownerPhones.length || ownerPhones.includes(phone)) return "ok";
+      console.log(`Right passcode from a phone not in OWNER_PHONE_IDS: ${phone || "(the website)"}`);
+    }
     if (!w) {
       if (wrong.size > 100_000) wrong.clear();
       wrong.set(key, (w = { start: now, count: 0 }));
@@ -185,13 +190,13 @@ const allowApp: RequestHandler = (req, res, next) => {
 
 export function createApp(
   client: Anthropic | null,
-  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions } = {},
+  options: { passcode?: string; perHour?: number; subscriptions?: SubscriptionOptions; ownerPhones?: string[] } = {},
 ) {
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
   app.use(express.json({ limit: "25mb" }));
-  const check = passcodeChecker(options.passcode || undefined);
+  const check = passcodeChecker(options.passcode || undefined, options.ownerPhones);
   const gate = requirePasscode(options.passcode || undefined, check);
   const subs = options.subscriptions;
   const access = requireAccess(options.passcode || undefined, subs, check);
@@ -295,6 +300,7 @@ if (isMain) {
     : undefined;
   const app = createApp(hasKey ? new Anthropic() : null, {
     passcode: process.env.APP_PASSCODE,
+    ownerPhones: (process.env.OWNER_PHONE_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean),
     perHour: Number(process.env.SORTS_PER_HOUR ?? 10_000),
     subscriptions,
   });

@@ -3,7 +3,7 @@ import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
-import { API } from "../lib/api";
+import { API, currentUserId } from "../lib/api";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
@@ -498,13 +498,19 @@ function Paywall({ lib }: { lib: Library }) {
 function PasscodeForm({ lib }: { lib: Library }) {
   const [code, setCode] = useState("");
   const [state, setState] = useState<"idle" | "checking" | "wrong">("idle");
+  const [problem, setProblem] = useState<string | null>(null);
   return (
     <form
       className="queue-row passcode"
       onSubmit={async (e) => {
         e.preventDefault();
         setState("checking");
-        setState((await lib.unlock(code.trim()).catch(() => false)) ? "idle" : "wrong");
+        setProblem(null);
+        const ok = await lib.unlock(code.trim()).catch((err: unknown) => {
+          setProblem(err instanceof Error ? err.message : null);
+          return false;
+        });
+        setState(ok ? "idle" : "wrong");
       }}
     >
       <label htmlFor="passcode">
@@ -515,7 +521,8 @@ function PasscodeForm({ lib }: { lib: Library }) {
         <input id="passcode" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" />
         <button className="primary" type="submit" disabled={!code.trim() || state === "checking"}>Unlock</button>
       </div>
-      {state === "wrong" && <p className="error small">That passcode didn't work.</p>}
+      {state === "wrong" && <p className="error small">{problem ?? "That passcode didn't work."}</p>}
+      {lib.subscriptions && currentUserId() && <p className="muted small">This phone: {currentUserId()}</p>}
     </form>
   );
 }

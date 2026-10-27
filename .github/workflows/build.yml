@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23.4'
           cache: npm
       - run: npm ci
       - run: npx tsc
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23.4'
           cache: npm
       - uses: actions/setup-java@v4
         with:
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23.4'
           cache: npm
       - run: npm ci
       - run: npm run build:app
@@ -130,7 +130,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.secrets.outputs.ready
         with:
-          node-version: 22
+          node-version: '22.23.4'
           cache: npm
       - if: steps.secrets.outputs.ready
         run: npm ci && npm run build:app

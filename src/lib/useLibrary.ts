@@ -11,7 +11,7 @@ import {
   type LibraryState,
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
-import { isOldFingerprint, markNotDuplicate, setHashes } from "../core/duplicates";
+import { isOldFingerprint, markNotDuplicate, pairsToLookAt, setHashes, setPairVerdicts } from "../core/duplicates";
 import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
 import { SORTED_ENOUGH, freedEnough } from "../core/reviews";
 import { deletedNotice } from "../core/storage";
@@ -34,7 +34,7 @@ import { happyMoment } from "./appReview";
 import { startPurchases } from "./purchases";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
-import { photoHash } from "./fingerprint";
+import { photoHash, sameInDetail } from "./fingerprint";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
 import { readVideo } from "./video";
@@ -375,6 +375,43 @@ export function useLibrary() {
   useEffect(() => {
     if (ready && state.photos.some(needsHash)) hashPhotos();
   }, [ready, state, hashPhotos]);
+
+  // Look-alikes that might be different pictures (a resized copy, or a receipt with another
+  // number) are compared at full detail before they show up as duplicates. A pair that can't be
+  // read is tried again next time the app starts.
+  const looking = useRef(false);
+  const lookFailed = useRef(new Set<string>());
+  const lookClosely = useCallback(async () => {
+    if (looking.current) return;
+    looking.current = true;
+    try {
+      for (;;) {
+        const pairs = pairsToLookAt(stateRef.current.photos).filter(([a, b]) => !lookFailed.current.has(`${a.id}:${b.id}`));
+        if (!pairs.length) return;
+        const verdicts: [Photo, Photo, boolean][] = [];
+        for (const [a, b] of pairs.slice(0, 10)) {
+          try {
+            verdicts.push([a, b, await sameInDetail(a, b)]);
+          } catch {
+            lookFailed.current.add(`${a.id}:${b.id}`);
+          }
+        }
+        if (verdicts.length) await commit(setPairVerdicts(stateRef.current, verdicts));
+      }
+    } finally {
+      looking.current = false;
+    }
+  }, [commit]);
+
+  // Checked a couple of seconds after the library changes (not on every change while sorting).
+  const lookTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (!ready || lookTimer.current) return;
+    lookTimer.current = setTimeout(() => {
+      lookTimer.current = undefined;
+      lookClosely();
+    }, 2000);
+  }, [ready, state, lookClosely]);
 
   // Reading the phone's library also collects what was sorted while the app was closed, so
   // the queue waits for it rather than sorting those photos a second time.

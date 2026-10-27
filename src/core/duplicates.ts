@@ -119,8 +119,40 @@ function tooPlain(hash: string): boolean {
  * saved twice, or was resized or re-compressed on the way (shared, downloaded, screenshotted).
  */
 export function differentMoments(a: Photo, b: Photo): boolean {
-  if (Math.abs(a.takenAt - b.takenAt) <= SAME_MOMENT_MS) return false;
+  if (sameMoment(a, b)) return false;
+  // Two screenshots taken at different times are two different screens: an invoice and the
+  // next month's invoice look alike but say different things.
+  if (a.isScreenshot && b.isScreenshot) return true;
   return a.width === b.width && a.height === b.height && a.bytes !== b.bytes;
+}
+
+function sameMoment(a: Photo, b: Photo): boolean {
+  return Math.abs(a.takenAt - b.takenAt) <= SAME_MOMENT_MS;
+}
+
+/** The very same file twice: same size in pixels and in bytes. */
+function sameFile(a: Photo, b: Photo): boolean {
+  return a.width === b.width && a.height === b.height && a.bytes === b.bytes;
+}
+
+/**
+ * Whether a look-alike pair needs a close look before it counts as copies. A pair from the same
+ * moment, or the very same file, doesn't. Anything else (say a resized copy) might be a different
+ * picture that only looks the same small, like a receipt with another order number, so the app
+ * compares the two at full detail first (`setPairVerdicts`).
+ */
+export function needsCloseLook(a: Photo, b: Photo): boolean {
+  return !sameMoment(a, b) && !sameFile(a, b);
+}
+
+function pairKey(a: Photo, b: Photo): [Photo, string] {
+  return a.id < b.id ? [a, b.id] : [b, a.id];
+}
+
+/** What the close look found for a pair: true for copies, false for different pictures, undefined if not looked at yet. */
+export function pairVerdict(a: Photo, b: Photo): boolean | undefined {
+  const [owner, other] = pairKey(a, b);
+  return owner.closeLooks?.[other];
 }
 
 function sameShape(a: Photo, b: Photo): boolean {
@@ -139,18 +171,15 @@ function keepOrder(a: Photo, b: Photo): number {
   return b.width * b.height - a.width * a.height || b.bytes - a.bytes || a.takenAt - b.takenAt || a.id.localeCompare(b.id);
 }
 
-/**
- * Groups photos that look the same. A group the person marked "not duplicates" is left out
- * until a new copy joins it. Largest space to free first.
- */
-export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
+/** Pairs of photos that look alike in their fingerprints, as index pairs into `hashed`. */
+function lookAlikes(photos: Photo[]): { hashed: Photo[]; pairs: [number, number][] } {
   const hashed = photos.filter((p) => p.hash && !isOldFingerprint(p.hash) && !tooPlain(p.hash));
   const details = new Map<number, Float64Array | null>();
   const detail = (i: number) => {
     if (!details.has(i)) details.set(i, detailOf(hashed[i].hash!));
     return details.get(i)!;
   };
-  const copies = (a: number, b: number) => {
+  const alike = (a: number, b: number) => {
     if (hashDistance(hashed[a].hash!, hashed[b].hash!) > MAX_DISTANCE || !sameShape(hashed[a], hashed[b])) return false;
     if (differentMoments(hashed[a], hashed[b])) return false;
     const da = detail(a);
@@ -168,6 +197,38 @@ export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
       else buckets.set(key, [i]);
     }
   });
+  const seen = new Set<string>();
+  const pairs: [number, number][] = [];
+  for (const list of buckets.values()) {
+    for (let x = 0; x < list.length; x++) {
+      for (let y = x + 1; y < list.length; y++) {
+        const a = Math.min(list[x], list[y]);
+        const b = Math.max(list[x], list[y]);
+        const key = `${a}:${b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (alike(a, b)) pairs.push([a, b]);
+      }
+    }
+  }
+  return { hashed, pairs };
+}
+
+/** Look-alike pairs still waiting for a close look, newest first. */
+export function pairsToLookAt(photos: Photo[]): [Photo, Photo][] {
+  const { hashed, pairs } = lookAlikes(photos);
+  return pairs
+    .map(([a, b]): [Photo, Photo] => [hashed[a], hashed[b]])
+    .filter(([a, b]) => needsCloseLook(a, b) && pairVerdict(a, b) === undefined)
+    .sort((x, y) => Math.max(y[0].takenAt, y[1].takenAt) - Math.max(x[0].takenAt, x[1].takenAt));
+}
+
+/**
+ * Groups photos that are copies of each other. A group the person marked "not duplicates" is
+ * left out until a new copy joins it. Largest space to free first.
+ */
+export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
+  const { hashed, pairs } = lookAlikes(photos);
   const parent = hashed.map((_, i) => i);
   const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
   // Members of each set, so two sets are never joined through a resized copy when they hold
@@ -183,15 +244,11 @@ export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
     members.set(rb, [...mb, ...ma]);
     members.delete(ra);
   };
-  for (const list of buckets.values()) {
-    for (let x = 0; x < list.length; x++) {
-      for (let y = x + 1; y < list.length; y++) {
-        const a = list[x];
-        const b = list[y];
-        if (root(a) === root(b)) continue;
-        if (copies(a, b)) join(a, b);
-      }
-    }
+  for (const [a, b] of pairs) {
+    if (root(a) === root(b)) continue;
+    // Only pairs that passed a close look (or need none) are copies.
+    if (needsCloseLook(hashed[a], hashed[b]) && pairVerdict(hashed[a], hashed[b]) !== true) continue;
+    join(a, b);
   }
   const groups = new Map<number, Photo[]>();
   hashed.forEach((p, i) => {
@@ -221,6 +278,26 @@ export function markNotDuplicate(state: LibraryState, photoIds: string[]): Chang
   const photos = state.photos.map((p) => {
     if (!ids.has(p.id) || p.notDuplicate) return p;
     const next = { ...p, notDuplicate: true };
+    changed.push(next);
+    return next;
+  });
+  return { state: { ...state, photos }, putPhotos: changed, putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [] };
+}
+
+/** Saves what close looks found, as [photo, photo, copies?]. */
+export function setPairVerdicts(state: LibraryState, verdicts: [Photo, Photo, boolean][]): Change {
+  const updates = new Map<string, Record<string, boolean>>();
+  for (const [a, b, same] of verdicts) {
+    const [owner, other] = pairKey(a, b);
+    const current = updates.get(owner.id) ?? { ...state.photos.find((p) => p.id === owner.id)?.closeLooks };
+    current[other] = same;
+    updates.set(owner.id, current);
+  }
+  const changed: Photo[] = [];
+  const photos = state.photos.map((p) => {
+    const closeLooks = updates.get(p.id);
+    if (!closeLooks) return p;
+    const next = { ...p, closeLooks };
     changed.push(next);
     return next;
   });

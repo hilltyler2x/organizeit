@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
-import { differentMoments, differenceHash, duplicateTotals, findDuplicates, hashDistance, isOldFingerprint, makeFingerprint, markNotDuplicate, setHashes } from "../src/core/duplicates";
+import { differentMoments, differenceHash, pairsToLookAt, setPairVerdicts, duplicateTotals, findDuplicates, hashDistance, isOldFingerprint, makeFingerprint, markNotDuplicate, setHashes } from "../src/core/duplicates";
 import { removePhotos } from "../src/core/library";
 import type { Photo } from "../src/core/types";
 
@@ -79,11 +79,38 @@ describe("duplicate photos", () => {
     // The same moment (Duplicate in Photos), or the very same file saved twice, is a copy.
     expect(findDuplicates([shot("a", 0, 15_100_000), shot("dup", 0, 15_200_000)])).toHaveLength(1);
     expect(findDuplicates([shot("a", 0, 15_100_000), shot("saved-again", 90_000, 15_100_000)])).toHaveLength(1);
-    // A resized copy is still caught, but never joins two separate shots into one set.
+    // A resized copy is still caught once a close look confirms it, but never joins two
+    // separate shots into one set.
     const resized = photo("r", A2, { width: 1080, height: 811, takenAt: 600_000, bytes: 300_000 });
-    const groups = findDuplicates([shot("a", 0, 15_100_000), shot("b", 2000, 15_300_000), resized]);
+    const photos = [shot("a", 0, 15_100_000), shot("b", 2000, 15_300_000), resized];
+    const looked = setPairVerdicts({ photos, categories: [] }, pairsToLookAt(photos).map(([x, y]) => [x, y, true])).state.photos;
+    const groups = findDuplicates(looked);
     expect(groups).toHaveLength(1);
     expect(groups[0].photos).toHaveLength(2);
+  });
+
+  it("never matches two screenshots taken at different times, like two invoices from the same company", () => {
+    const invoice = (id: string, takenAt: number, height: number) =>
+      photo(id, A, { width: 1290, height, takenAt, bytes: 211_000 + height, isScreenshot: true });
+    // Same layout, other invoice number; even a slightly different crop doesn't make them copies.
+    expect(findDuplicates([invoice("oct", 0, 1572), invoice("nov", 86_400_000, 1568)])).toEqual([]);
+    expect(pairsToLookAt([invoice("oct", 0, 1572), invoice("nov", 86_400_000, 1568)])).toEqual([]);
+  });
+
+  it("only flags a resized copy after a close look at full detail says it is the same picture", () => {
+    const original = photo("orig", A, { width: 1290, height: 1572, takenAt: 0, bytes: 900_000 });
+    const resized = photo("small", A2, { width: 1080, height: 1316, takenAt: 3_600_000, bytes: 200_000 });
+    const state = { photos: [original, resized], categories: [] };
+    // Waiting for its close look: not shown yet.
+    expect(findDuplicates(state.photos)).toEqual([]);
+    expect(pairsToLookAt(state.photos).map(([x, y]) => [x.id, y.id].sort())).toEqual([["orig", "small"]]);
+    // Different text found up close (another order number): never shown, and not looked at again.
+    const different = setPairVerdicts(state, [[original, resized, false]]).state;
+    expect(findDuplicates(different.photos)).toEqual([]);
+    expect(pairsToLookAt(different.photos)).toEqual([]);
+    // The same picture up close: shown as a copy.
+    const same = setPairVerdicts(state, [[resized, original, true]]).state;
+    expect(findDuplicates(same.photos)).toHaveLength(1);
   });
 
   it("ignores fingerprints from before the detail check until they are worked out again", () => {

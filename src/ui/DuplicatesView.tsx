@@ -147,7 +147,8 @@ export function DuplicatesView({ lib, onDone }: { lib: Library; onDone: () => vo
           photos={inspected.photos}
           start={inspecting!.start}
           keeps={(id) => keeps(inspected, id)}
-          onToggle={(id) => toggle(inspected, id)}
+          busy={busy}
+          onDelete={(p) => deletePhotos([p])}
           onClose={() => setInspecting(null)}
         />
       )}

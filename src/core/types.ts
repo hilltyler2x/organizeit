@@ -61,6 +61,11 @@ export interface Photo {
    * until worked out; an empty string means the image couldn't be read.
    */
   hash?: string;
+  /**
+   * Results of comparing this photo at full detail with look-alikes (by their id): true for a
+   * copy, false for a different picture. Kept on the photo with the smaller id of each pair.
+   */
+  closeLooks?: Record<string, boolean>;
   /** The person said this photo is not a copy of the ones it looks like. */
   notDuplicate?: boolean;
   /** Where the photo came from, so a native build can act on the original asset. */

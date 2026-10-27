@@ -326,15 +326,18 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
 button.dupe-badge { border: none; min-height: 28px; padding: 4px 10px; cursor: pointer; z-index: 1; }
 .dupe-group .caption { pointer-events: none; }
 .inspector {
-  position: fixed; inset: 0; z-index: 60; background: #000; color: #fff; display: grid; grid-template-rows: auto 1fr auto;
+  position: fixed; inset: 0; z-index: 1000; background: #000; color: #fff; display: grid; grid-template-rows: auto 1fr auto;
   padding: var(--safe-top, 0) var(--safe-right, 0) var(--safe-bottom, 0) var(--safe-left, 0);
 }
 .inspector-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; }
 .inspector-top button { background: rgb(255 255 255 / 0.14); color: #fff; border-color: transparent; }
 .inspector-count { font-weight: 600; }
-.inspector-keep { min-width: 84px; font-weight: 700; }
-.inspector-top .inspector-keep.keep { background: var(--accent); color: var(--accent-text); }
-.inspector-top .inspector-keep.delete { background: var(--danger); color: #fff; }
+.inspector-tag { padding: 4px 10px; border-radius: 99px; font-size: 0.8rem; font-weight: 700; }
+.inspector-tag.keep { background: var(--accent); color: var(--accent-text); }
+.inspector-tag.delete { background: var(--danger); color: #fff; }
+.inspector-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.inspector-actions button { min-height: 48px; font-size: 1rem; }
+.inspector-actions button:not(.danger) { background: rgb(255 255 255 / 0.14); color: #fff; border-color: transparent; }
 .inspector-stage { position: relative; overflow: hidden; touch-action: none; display: grid; place-items: center; min-height: 0; user-select: none; -webkit-user-select: none; }
 .inspector-stage img { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center; will-change: transform; -webkit-touch-callout: none; }
 .inspector-wait { opacity: 0.7; }
@@ -355,3 +358,4 @@ button.dupe-badge { border: none; min-height: 28px; padding: 4px 10px; cursor: p
 .inspector-dots span.on { outline: 2px solid #fff; outline-offset: 1px; }
 .inspector-dots span.on.keep { background: var(--accent); }
 .inspector-dots span.on.delete { background: var(--danger); }
+.inspector-actions button.danger { background: var(--danger); color: #fff; border-color: transparent; }

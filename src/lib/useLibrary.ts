@@ -79,6 +79,8 @@ export function useLibrary() {
   const [subscriptions, setSubscriptions] = useState(false);
   const [plan, setPlan] = useState<Subscription | null>(null);
   const [paywall, setPaywall] = useState<{ reason: "subscribe" | "limit"; message: string } | null>(null);
+  // "Not now" on the subscribe card: shrinks it to one line until the app is next opened.
+  const [paywallHidden, setPaywallHidden] = useState(false);
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
@@ -648,6 +650,8 @@ export function useLibrary() {
     plan,
     /** Why sorting is paused for want of a subscription, if it is. */
     paywall,
+    paywallHidden,
+    hidePaywall: setPaywallHidden,
     refreshPlan,
     importPhotos,
     retry,

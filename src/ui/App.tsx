@@ -290,7 +290,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
         </div>
       )}
       {lib.locked && lib.server === "ok" && <PasscodeForm lib={lib} />}
-      {lib.paywall && lib.server === "ok" && <Paywall lib={lib} />}
+      {lib.paywall && lib.server === "ok" && (lib.paywallHidden ? <PaywallReminder lib={lib} /> : <Paywall lib={lib} />)}
       {lib.server === "no-ai" && (
         <p className="error banner">
           {lib.aiProblem ?? "The sorting server doesn't have an Anthropic API key."} Add a working ANTHROPIC_API_KEY to the
@@ -377,6 +377,18 @@ function PlanNote({ lib }: { lib: Library }) {
   return null;
 }
 
+/** The subscribe card, put away with "Not now": one quiet line that brings it back. */
+function PaywallReminder({ lib }: { lib: Library }) {
+  return (
+    <div className="queue-row limited">
+      <span className="muted small">
+        {lib.paywall!.reason === "limit" ? "Sorting is paused until your subscription renews." : "New photos wait here until you subscribe."}
+      </span>
+      {lib.paywall!.reason === "subscribe" && <button onClick={() => lib.hidePaywall(false)}>See plans</button>}
+    </div>
+  );
+}
+
 /** Sorting is paused until the person subscribes (or, in the $2 month, until it renews). */
 function Paywall({ lib }: { lib: Library }) {
   const reason = lib.paywall!.reason;
@@ -424,6 +436,7 @@ function Paywall({ lib }: { lib: Library }) {
       <div className="queue-row paywall">
         <strong>Sorting is paused for this month.</strong>
         <p className="muted small">{lib.paywall!.message}</p>
+        <button className="link small" onClick={() => lib.hidePaywall(true)}>OK</button>
       </div>
     );
   }
@@ -471,11 +484,11 @@ function Paywall({ lib }: { lib: Library }) {
           <a href={`${API}/privacy.html`} target="_blank" rel="noreferrer">Privacy</a>
         </p>
       )}
-      {usePasscode ? (
-        <PasscodeForm lib={lib} />
-      ) : (
-        <button className="link small" onClick={() => setUsePasscode(true)}>Have a passcode?</button>
-      )}
+      <div className="row">
+        <button className="link small" disabled={state === "busy"} onClick={() => lib.hidePaywall(true)}>Not now</button>
+        {!usePasscode && <button className="link small" onClick={() => setUsePasscode(true)}>Have a passcode?</button>}
+      </div>
+      {usePasscode && <PasscodeForm lib={lib} />}
     </div>
   );
 }

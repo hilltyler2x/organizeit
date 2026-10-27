@@ -1,4 +1,4 @@
-import { differenceHash } from "../core/duplicates";
+import { differenceHash, makeFingerprint } from "../core/duplicates";
 import type { Photo } from "../core/types";
 import * as store from "./db";
 import { PhotoLibrary, base64ToBlob } from "./photoLibrary";
@@ -17,10 +17,11 @@ async function smallImage(photo: Photo): Promise<Blob> {
   return thumb;
 }
 
-// Drawn at 36x32 and averaged in 4x4 blocks down to 9x8, which is steadier than letting the
-// browser shrink straight to 9x8.
-const W = 36;
-const H = 32;
+// Drawn at 144x128 and averaged in blocks: 16x16-pixel blocks give the 9x8 image for the hash,
+// 9x8-pixel blocks the 16x16 detail. Averaging is steadier than letting the browser shrink
+// straight to such small sizes.
+const W = 144;
+const H = 128;
 
 export async function photoHash(photo: Photo): Promise<string> {
   const bitmap = await createImageBitmap(await smallImage(photo), { imageOrientation: "from-image" });
@@ -33,12 +34,15 @@ export async function photoHash(photo: Photo): Promise<string> {
   ctx.drawImage(bitmap, 0, 0, W, H);
   bitmap.close();
   const { data } = ctx.getImageData(0, 0, W, H);
-  const grid = new Float64Array(72);
+  const coarse = new Float64Array(72);
+  const detail = new Float64Array(256);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
-      grid[Math.floor(y / 4) * 9 + Math.floor(x / 4)] += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const light = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      coarse[Math.floor(y / 16) * 9 + Math.floor(x / 16)] += light;
+      detail[Math.floor(y / 8) * 16 + Math.floor(x / 9)] += light / 72;
     }
   }
-  return differenceHash(grid);
+  return makeFingerprint(differenceHash(coarse), detail);
 }

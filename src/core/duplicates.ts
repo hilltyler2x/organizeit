@@ -1,14 +1,25 @@
 import type { Change, LibraryState } from "./library";
 import type { Photo } from "./types";
 
-// Duplicate photos: the same picture saved twice, a re-downloaded copy, or the same screen
-// screenshotted again. Each photo gets a tiny fingerprint of what it looks like (a 64-bit
-// "difference hash" of a 9x8 grayscale copy, as 16 hex digits), and photos whose fingerprints
-// nearly match are grouped. Duplicates are a to-do list like To review, never a category:
-// every photo keeps its own category, and the person decides which copies to delete.
+// Duplicate photos: the same picture saved twice, a re-downloaded copy, or a resized or
+// re-compressed copy. Never two different shots, even ones taken seconds apart in front of the
+// same wall: a different pose is a different photo.
+//
+// Each photo gets a fingerprint in two parts, `<hash>.<detail>`:
+// - hash: a 64-bit "difference hash" of a 9x8 grayscale copy (16 hex digits). Cheap to compare,
+//   used to find candidates. On its own it is too coarse: a person moving an arm barely changes it.
+// - detail: a 16x16 grayscale copy (256 bytes, base64). Two candidates only count as copies when
+//   every part of the picture matches, so a moved arm, a step to the side or a turned head
+//   rules them out.
+// Duplicates are a to-do list like To review, never a category: every photo keeps its own
+// category, and the person decides which copies to delete.
 
-/** Fingerprints differing in at most this many of 64 bits count as the same picture. */
+/** Hashes differing in at most this many of 64 bits are compared in detail. */
 export const MAX_DISTANCE = 3;
+/** Detail of copies differs by at most this much in any 4x4 area (in standard deviations). */
+export const MAX_AREA_DIFFERENCE = 0.1;
+/** ...and by at most this much in any single cell. Copies measure around 0.1, a moved arm 1 or more. */
+export const MAX_CELL_DIFFERENCE = 0.45;
 
 export interface DuplicateGroup {
   /** The copies, the one OrganizeIt suggests keeping first. */
@@ -41,7 +52,48 @@ function bitCount(n: number): number {
   return (((n + (n >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
 }
 
-/** How many of the 64 bits two fingerprints differ in. */
+/** A fingerprint from its two parts: the 9x8 difference hash and the 16x16 grayscale detail. */
+export function makeFingerprint(hash: string, detail: ArrayLike<number>): string {
+  if (detail.length !== 256) throw new Error("A fingerprint needs a 16x16 detail image.");
+  let binary = "";
+  for (let i = 0; i < 256; i++) binary += String.fromCharCode(Math.max(0, Math.min(255, Math.round(detail[i]))));
+  return `${hash}.${btoa(binary)}`;
+}
+
+/** Fingerprints made before the detail part was added; these are worked out again. */
+export function isOldFingerprint(fingerprint: string): boolean {
+  return fingerprint !== "" && !fingerprint.includes(".");
+}
+
+/** The detail part, scaled so overall brightness and contrast don't matter (a re-save can shift both). */
+function detailOf(fingerprint: string): Float64Array | null {
+  const dot = fingerprint.indexOf(".");
+  if (dot < 0) return null;
+  const binary = atob(fingerprint.slice(dot + 1));
+  if (binary.length !== 256) return null;
+  const v = new Float64Array(256);
+  let mean = 0;
+  for (let i = 0; i < 256; i++) mean += v[i] = binary.charCodeAt(i);
+  mean /= 256;
+  let variance = 0;
+  for (let i = 0; i < 256; i++) variance += (v[i] - mean) ** 2;
+  const sd = Math.sqrt(variance / 256) || 1;
+  for (let i = 0; i < 256; i++) v[i] = (v[i] - mean) / sd;
+  return v;
+}
+
+/** True when every part of two detail images matches, as it does for copies of one shot. */
+export function sameDetail(a: Float64Array, b: Float64Array): boolean {
+  const areas = new Float64Array(16);
+  for (let i = 0; i < 256; i++) {
+    const d = Math.abs(a[i] - b[i]);
+    if (d > MAX_CELL_DIFFERENCE) return false;
+    areas[(i >> 6) * 4 + ((i & 15) >> 2)] += d / 16;
+  }
+  return areas.every((d) => d <= MAX_AREA_DIFFERENCE);
+}
+
+/** How many of the 64 bits two fingerprints' hashes differ in. */
 export function hashDistance(a: string, b: string): number {
   return (
     bitCount(parseInt(a.slice(0, 8), 16) ^ parseInt(b.slice(0, 8), 16)) +
@@ -79,7 +131,18 @@ function keepOrder(a: Photo, b: Photo): number {
  * until a new copy joins it. Largest space to free first.
  */
 export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
-  const hashed = photos.filter((p) => p.hash && !tooPlain(p.hash));
+  const hashed = photos.filter((p) => p.hash && !isOldFingerprint(p.hash) && !tooPlain(p.hash));
+  const details = new Map<number, Float64Array | null>();
+  const detail = (i: number) => {
+    if (!details.has(i)) details.set(i, detailOf(hashed[i].hash!));
+    return details.get(i)!;
+  };
+  const copies = (a: number, b: number) => {
+    if (hashDistance(hashed[a].hash!, hashed[b].hash!) > MAX_DISTANCE || !sameShape(hashed[a], hashed[b])) return false;
+    const da = detail(a);
+    const db = detail(b);
+    return !!da && !!db && sameDetail(da, db);
+  };
   // Two fingerprints within 3 bits share at least one of their four 16-bit quarters exactly,
   // so only photos sharing a quarter need comparing.
   const buckets = new Map<string, number[]>();
@@ -99,7 +162,7 @@ export function findDuplicates(photos: Photo[]): DuplicateGroup[] {
         const a = list[x];
         const b = list[y];
         if (root(a) === root(b)) continue;
-        if (hashDistance(hashed[a].hash!, hashed[b].hash!) <= MAX_DISTANCE && sameShape(hashed[a], hashed[b])) parent[root(a)] = root(b);
+        if (copies(a, b)) parent[root(a)] = root(b);
       }
     }
   }

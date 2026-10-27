@@ -36,7 +36,7 @@ type RcSubscription = {
 };
 
 /** Reads someone's subscription from RevenueCat's REST API with the project's secret key. */
-export function revenueCat(secretKey: string, entitlement = "pro", fetchImpl: typeof fetch = fetch): PlanSource {
+export function revenueCat(secretKey: string, entitlement = "organizeit_pro", fetchImpl: typeof fetch = fetch): PlanSource {
   return {
     async plan(userId) {
       let r: Response;

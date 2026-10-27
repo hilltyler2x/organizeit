@@ -52,7 +52,7 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
 - Server: `REVENUECAT_SECRET_KEY` (RevenueCat → Project settings → API keys → secret key)
   turns subscriptions on. `DATABASE_URL` (any Postgres, e.g. a Render Postgres database)
   keeps the photo counts through restarts; without it they live in memory.
-  `REVENUECAT_ENTITLEMENT` is the entitlement id (default `pro`).
+  `REVENUECAT_ENTITLEMENT` is the entitlement id (default `organizeit_pro`).
 - App builds: repository variables `REVENUECAT_IOS_KEY` and `REVENUECAT_ANDROID_KEY`
   (RevenueCat's public app-specific keys) let the app show the store's purchase sheet.
 - Each phone is known by an id that survives reinstalling the app (a keychain entry on

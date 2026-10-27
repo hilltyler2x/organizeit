@@ -112,18 +112,18 @@ describe("subscriptions", () => {
 describe("reading RevenueCat", () => {
   const now = Date.parse("2026-11-10T00:00:00Z");
   const subscriber = (periodType: string, expires = "2026-12-01T00:00:00Z") => ({
-    entitlements: { pro: { expires_date: expires, product_identifier: "monthly", purchase_date: "2026-11-01T00:00:00Z" } },
+    entitlements: { organizeit_pro: { expires_date: expires, product_identifier: "monthly", purchase_date: "2026-11-01T00:00:00Z" } },
     subscriptions: { monthly: { period_type: periodType, purchase_date: "2026-11-01T00:00:00Z", expires_date: expires } },
   });
 
   it("tells the $2 first month from a full-price month", () => {
-    expect(planFrom(subscriber("intro"), "pro", now)).toMatchObject({ active: true, intro: true, periodStart: Date.parse("2026-11-01T00:00:00Z") });
-    expect(planFrom(subscriber("normal"), "pro", now)).toMatchObject({ active: true, intro: false });
+    expect(planFrom(subscriber("intro"), "organizeit_pro", now)).toMatchObject({ active: true, intro: true, periodStart: Date.parse("2026-11-01T00:00:00Z") });
+    expect(planFrom(subscriber("normal"), "organizeit_pro", now)).toMatchObject({ active: true, intro: false });
   });
 
   it("treats an expired or missing entitlement as not subscribed", () => {
-    expect(planFrom(subscriber("normal", "2026-11-05T00:00:00Z"), "pro", now).active).toBe(false);
-    expect(planFrom({}, "pro", now).active).toBe(false);
+    expect(planFrom(subscriber("normal", "2026-11-05T00:00:00Z"), "organizeit_pro", now).active).toBe(false);
+    expect(planFrom({}, "organizeit_pro", now).active).toBe(false);
     expect(planFrom(subscriber("normal"), "other", now).active).toBe(false);
   });
 
@@ -133,7 +133,7 @@ describe("reading RevenueCat", () => {
       seen.push(`${url} ${(init.headers as Record<string, string>).Authorization}`);
       return new Response(JSON.stringify({ subscriber: subscriber("normal", "2099-01-01T00:00:00Z") }));
     }) as unknown as typeof fetch;
-    const plans = cached(revenueCat("sk_test", "pro", fakeFetch));
+    const plans = cached(revenueCat("sk_test", "organizeit_pro", fakeFetch));
     expect((await plans.plan("$RCAnonymousID:abc")).active).toBe(true);
     await plans.plan("$RCAnonymousID:abc");
     expect(seen).toEqual(["https://api.revenuecat.com/v1/subscribers/%24RCAnonymousID%3Aabc Bearer sk_test"]);

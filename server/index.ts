@@ -239,7 +239,7 @@ if (isMain) {
   const rcKey = process.env.REVENUECAT_SECRET_KEY;
   const subscriptions: SubscriptionOptions | undefined = rcKey
     ? {
-        plans: cached(revenueCat(rcKey, process.env.REVENUECAT_ENTITLEMENT || "pro")),
+        plans: cached(revenueCat(rcKey, process.env.REVENUECAT_ENTITLEMENT || "organizeit_pro")),
         usage: process.env.DATABASE_URL ? await postgresUsage(process.env.DATABASE_URL) : memoryUsage(),
         freeLimit: Number(process.env.FREE_SORT_LIMIT ?? 100),
         introLimit: Number(process.env.INTRO_SORT_LIMIT ?? 2000),

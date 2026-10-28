@@ -138,7 +138,7 @@ public class PhotoLibraryPlugin: CAPPlugin, CAPBridgedPlugin, PHPhotoLibraryChan
     }
 
     /// Returns a JPEG copy of a photo scaled so its longest side is at most `maxSide`. For a
-    /// video it is the opening frame or, with `frames`, four frames from across it in a grid.
+    /// video it is the opening frame or, with `frames`, six frames from across it in a grid.
     @objc func getImage(_ call: CAPPluginCall) {
         guard let id = call.getString("id") else { return call.reject("Missing id") }
         let maxSide = CGFloat(max(64, call.getInt("maxSide", 1024)))

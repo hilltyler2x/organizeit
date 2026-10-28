@@ -201,7 +201,7 @@ public class PhotoLibraryPlugin extends Plugin {
 
     /**
      * Returns a JPEG copy of a photo scaled so its longest side is at most maxSide. For a video
-     * it is the opening frame or, with frames, four frames from across it in a grid.
+     * it is the opening frame or, with frames, six frames from across it in a grid.
      */
     @PluginMethod
     public void getImage(PluginCall call) {

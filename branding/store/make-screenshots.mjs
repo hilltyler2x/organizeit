@@ -1,5 +1,5 @@
 // Builds the App Store screenshots from the real app filled with a demo library.
-// Usage: start the app (npx vite --port 5199), then: node branding/store/make-screenshots.mjs http://localhost:5199
+// Usage: start the app (npx vite --port 5199), then: node branding/store/make-screenshots.mjs http://localhost:5199 [set name]
 // Needs Playwright (npm i -g playwright). Output: branding/store/out/
 import fs from "node:fs";
 import path from "node:path";
@@ -199,7 +199,7 @@ p{font-size:${device.h1 * 0.42}px;margin:${device.h1 * 0.35}px 0 0;opacity:.88;f
 border-radius:${device.radius}px;background:#0b0f0f;padding:${device.bezel}px;box-shadow:0 40px 120px rgb(0 0 0/.45),inset 0 0 0 3px #2a3433}
 .dev img{display:block;width:100%;border-radius:${device.radius - device.bezel}px}
 .bar{position:absolute;left:${device.bezel}px;right:${device.bezel}px;top:${device.bezel}px;height:${device.statusH}px;display:flex;justify-content:space-between;align-items:center;padding:0 ${device.devW * 0.09}px;font-weight:600;font-size:${device.statusH * 0.3}px;color:#111}
-${device.phone ? `.island{position:absolute;top:${device.bezel + device.devW * 0.025}px;left:50%;transform:translateX(-50%);width:${device.devW * 0.28}px;height:${device.devW * 0.08}px;background:#000;border-radius:999px}` : ""}
+${device.android ? `.island{position:absolute;top:${device.bezel + device.statusH * 0.3}px;left:50%;transform:translateX(-50%);width:${device.statusH * 0.4}px;height:${device.statusH * 0.4}px;background:#000;border-radius:999px}` : device.phone ? `.island{position:absolute;top:${device.bezel + device.devW * 0.025}px;left:50%;transform:translateX(-50%);width:${device.devW * 0.28}px;height:${device.devW * 0.08}px;background:#000;border-radius:999px}` : ""}
 </style></head><body><div class="head"><h1>${shot.title}</h1><p>${shot.sub}</p></div>
 <div class="dev"><img src="${img}"><div class="bar"><span>9:41</span><span>${STATUS_ICONS}</span></div>${device.phone ? '<div class="island"></div>' : ""}</div></body></html>`;
     const p = await browser.newPage({ viewport: { width: W, height: H } });
@@ -218,6 +218,27 @@ const DEVICES = [
   // iPad 13" display: 2064 x 2752
   { name: "ipad-13", phone: false, viewport: { width: 1032, height: 1376 }, scale: 2, out: [2064, 2752],
     top: 170, h1: 120, devTop: 600, devW: 1760, bezel: 34, radius: 80, statusH: 0 },
+  // Google Play phone: 1080 x 1920 (Play turns down anything longer than 2:1)
+  { name: "android-phone", phone: true, android: true, viewport: { width: 412, height: 915 }, scale: 2, out: [1080, 1920],
+    top: 110, h1: 76, devTop: 430, devW: 800, bezel: 18, radius: 70, statusH: 90 },
 ];
-for (const d of DEVICES) await compose(d, await capture(d));
+const only = process.argv[3]; // e.g. "android-phone" to build one set
+for (const d of DEVICES.filter((d) => !only || d.name === only)) await compose(d, await capture(d));
+
+// Google Play's feature graphic (1024 x 500) and store icon (512 x 512).
+{
+  const p = await browser.newPage({ viewport: { width: 1024, height: 500 } });
+  await p.setContent(`<html><body style="margin:0;width:1024px;height:500px;overflow:hidden;font-family:Inter,sans-serif;color:#fff;
+background:radial-gradient(120% 120% at 15% 0%,#14b8a6 0%,#0f766e 45%,#134e4a 100%);display:flex;align-items:center;gap:56px;padding:0 80px;box-sizing:border-box">
+<div style="width:220px;height:220px;flex:none;border-radius:48px;overflow:hidden;box-shadow:0 24px 60px rgb(0 0 0/.35)">${ICON.replace("<svg ", '<svg width="220" height="220" ')}</div>
+<div><div style="font-size:84px;font-weight:800;letter-spacing:-.03em;line-height:1">OrganizeIt</div>
+<div style="font-size:34px;font-weight:500;opacity:.9;margin-top:18px;line-height:1.25">Your camera roll, sorted.<br>Receipts and products by type.</div></div></body></html>`);
+  await p.screenshot({ path: path.join(OUT, "play-feature-graphic.png") });
+  await p.close();
+  const q = await browser.newPage({ viewport: { width: 512, height: 512 } });
+  await q.setContent(`<body style="margin:0">${ICON.replace("<svg ", '<svg width="512" height="512" ')}</body>`);
+  await q.screenshot({ path: path.join(OUT, "play-icon-512.png") });
+  await q.close();
+  console.log("wrote Play feature graphic and icon");
+}
 await browser.close();

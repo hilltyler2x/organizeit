@@ -3,7 +3,7 @@ import { formatBytes, formatDuration } from "../core/storage";
 import type { Category, Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { MoveDialog } from "./MoveDialog";
-import { PhotoMenu, copyAndShare } from "./PhotoMenu";
+import { PhotoMenu, copyAndShare, toast } from "./PhotoMenu";
 import { useLongPress } from "./selection";
 import { forgetImages, useImageUrl } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
@@ -83,7 +83,8 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
           onClose={() => setMoving(false)}
           onMove={async (target) => {
             try {
-              await lib.move([photo.id], target);
+              const also = await lib.move([photo.id], target);
+              if (also) toast(`Also moved ${also} similar ${also === 1 ? "one" : "ones"} the AI had put in the same place`);
               setMoving(false);
               props.onEmptied();
             } catch (e) {

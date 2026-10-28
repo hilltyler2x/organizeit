@@ -15,6 +15,7 @@ import {
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { isOldFingerprint, markNotDuplicate, pairsToLookAt, setHashes, setPairVerdicts } from "../core/duplicates";
+import { alsoMove, followHabits } from "../core/habits";
 import { addLessons, lessonsForPrompt, lessonsFromMove, relinkLessons } from "../core/lessons";
 import { SORTED_ENOUGH, freedEnough } from "../core/reviews";
 import { deletedNotice } from "../core/storage";
@@ -144,6 +145,20 @@ export function useLibrary() {
         await store.putPhotos(requeue);
         const byId = new Map(requeue.map((p) => [p.id, p]));
         photos = photos.map((p) => byId.get(p.id) ?? p);
+      }
+      // Fold together categories that mean the same thing, from before this was enforced or
+      // made by an older build ("Shoes" and "Sneakers", "Tee" and "Shirts").
+      const tidy = mergeLookAlikeCategories({ photos, categories });
+      if (tidy.merged.size) {
+        ({ photos, categories } = tidy.state);
+        const relinked = relinkLessons(lessons, tidy.merged, categories);
+        const byId = new Map(relinked.map((l) => [l.id, l]));
+        lessonsRef.current = lessons.map((l) => byId.get(l.id) ?? l);
+        await Promise.all([
+          store.putPhotos(tidy.putPhotos),
+          store.deleteCategories(tidy.deletedCategoryIds),
+          relinked.length ? store.saveLessons(relinked, []) : null,
+        ]);
       }
       // Photos an older sorter left for the person are sorted again by the current one.
       const resort = requeueForResort({ photos, categories });
@@ -286,9 +301,10 @@ export function useLibrary() {
         categories: stateRef.current.categories,
         lessons: lessonsForPrompt(lessonsRef.current, stateRef.current.categories),
       });
+      // Filed the way this person files things (see core/habits.ts).
       const filed = ready.flatMap((photo, i) => {
         const r = results[i];
-        return "error" in r ? [] : [{ photoId: photo.id, result: r }];
+        return "error" in r ? [] : [{ photoId: photo.id, result: followHabits(r, lessonsRef.current, stateRef.current) }];
       });
       if (filed.length) await commit(applyClassifications(stateRef.current, filed, newId));
       const failed = ready.filter((_, i) => "error" in results[i]);
@@ -508,7 +524,10 @@ export function useLibrary() {
       if (SORT_LIMIT) assets = assets.sort((a, b) => b.createdAt - a.createdAt).slice(0, SORT_LIMIT);
       await commit(syncWithDevice(stateRef.current, assets, newId));
       const { results } = await BackgroundSort.takeResults().catch(() => ({ results: [] }));
-      if (results.length) await commit(applyBackgroundResults(stateRef.current, results, newId));
+      if (results.length) {
+        const habits = results.map((r) => ({ ...r, result: followHabits(r.result, lessonsRef.current, stateRef.current) }));
+        await commit(applyBackgroundResults(stateRef.current, habits, newId));
+      }
       scanned.current = true;
       BackgroundSort.status().then(setBackground, () => setBackground(null));
     } finally {
@@ -668,18 +687,43 @@ export function useLibrary() {
     }
   }, []);
 
-  /** Moves photos and remembers any correction so later sorts get it right on their own. */
-  const move = useCallback(async (ids: string[], target: { categoryId: string } | { section: Section; name: string }) => {
-    const before = stateRef.current;
-    const change = movePhotos(before, ids, target, newId);
-    await commit(change);
-    const learned = lessonsFromMove(before, change.state, ids, newId);
-    if (!learned.length) return;
+  const keepLessons = async (learned: Lesson[]) => {
     const { lessons, dropped } = addLessons(lessonsRef.current, learned);
     lessonsRef.current = lessons;
     setLessonCount(lessons.length);
     const keep = new Set(lessons.map((l) => l.id));
     await store.saveLessons(learned.filter((l) => keep.has(l.id)), [...dropped, ...learned.filter((l) => !keep.has(l.id)).map((l) => l.id)]);
+  };
+
+  /**
+   * Moves photos and remembers any correction so later sorts get it right on their own. Photos
+   * the AI put in the same wrong place that look like the moved ones go along. Returns how
+   * many of those moved too.
+   */
+  const move = useCallback(async (ids: string[], target: { categoryId: string } | { section: Section; name: string }) => {
+    const before = stateRef.current;
+    const change = movePhotos(before, ids, target, newId);
+    await commit(change);
+    const learned = lessonsFromMove(before, change.state, ids, newId);
+    const others = alsoMove(before, change.state, ids);
+    const to = change.state.photos.find((p) => p.id === ids[0])?.categoryId;
+    if (others.length && to) await commit(movePhotos(stateRef.current, others, { categoryId: to }, newId));
+    if (learned.length) await keepLessons(learned);
+    return others.length;
+  }, [commit]);
+
+  /** Renames a category. Renaming it to one that exists merges them, and lessons follow. */
+  const rename = useCallback(async (categoryId: string, name: string) => {
+    const change = renameCategory(stateRef.current, categoryId, name, newId);
+    await commit(change);
+    if (!change.deletedCategoryIds.includes(categoryId)) return;
+    const into = change.putCategories.find((c) => c.id !== categoryId);
+    if (!into) return;
+    const relinked = relinkLessons(lessonsRef.current, new Map([[categoryId, into.id]]), change.state.categories);
+    if (!relinked.length) return;
+    const byId = new Map(relinked.map((l) => [l.id, l]));
+    lessonsRef.current = lessonsRef.current.map((l) => byId.get(l.id) ?? l);
+    await store.saveLessons(relinked, []);
   }, [commit]);
 
   const retry = useCallback(async (ids: string[]) => {
@@ -734,7 +778,7 @@ export function useLibrary() {
     keepAll,
     /** Photos not yet checked for duplicates. */
     unchecked,
-    rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
+    rename,
   };
 }
 

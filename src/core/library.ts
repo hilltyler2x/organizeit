@@ -1,5 +1,6 @@
 import { emptyCreatedCategories } from "./storage";
 import { findMatchingCategory, isBannedCategoryName, resolveCategory } from "./categories";
+import { withAlias } from "./habits";
 import type { Category, Classification, Photo, Section } from "./types";
 
 /** One photo or video as the device's photo library reports it. */
@@ -200,14 +201,18 @@ export function renameCategory(state: LibraryState, categoryId: string, name: st
   if (!current) throw new Error("That category no longer exists.");
   const others = state.categories.filter((c) => c.id !== categoryId);
   const { category, created } = resolveCategory(others, current.section, name, newId);
+  // The old name is kept as an alias, so the AI calling things by it still files them here.
   if (created) {
-    const renamed = { ...current, name: category.name };
+    const renamed = withAlias({ ...current, name: category.name }, current.name);
     const categories = state.categories.map((c) => (c.id === categoryId ? renamed : c));
     return finish(state, state.photos, categories, [], [renamed]);
   }
   // Merge: move everything into the existing category; the old one is removed when empty.
+  const into = withAlias(category, current.name);
+  const merged = { ...state, categories: state.categories.map((c) => (c.id === into.id ? into : c)) };
   const ids = state.photos.filter((p) => p.categoryId === categoryId).map((p) => p.id);
-  return movePhotos(state, ids, { categoryId: category.id }, newId);
+  const change = movePhotos(merged, ids, { categoryId: category.id }, newId);
+  return { ...change, putCategories: [...change.putCategories, into] };
 }
 
 /**

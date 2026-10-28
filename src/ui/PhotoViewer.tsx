@@ -7,6 +7,7 @@ import { PhotoMenu, copyAndShare, toast } from "./PhotoMenu";
 import { useLongPress } from "./selection";
 import { forgetImages, useImageUrl } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
+import { usePinchZoom } from "./zoom";
 
 export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Category; onClose: () => void; onEmptied: (deleted?: string) => void }) {
   const { lib, photo } = props;
@@ -15,6 +16,8 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
   const [error, setError] = useState("");
   const [menu, setMenu] = useState(false);
   const press = useLongPress(() => setMenu(true));
+  const zoom = usePinchZoom({ resetKey: photo.id, enabled: !photo.isVideo });
+  const hold = press.handlers(photo.id);
 
   const remove = async () => {
     // In the app the phone shows its own delete confirmation.
@@ -39,8 +42,31 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
             <VideoPlayer photo={photo} />
           </div>
         ) : (
-          <div className="viewer-image" {...press.handlers(photo.id)}>
-            {url && <img src={url} alt={photo.label ?? photo.fileName} draggable={false} />}
+          // Pinch or double-tap to zoom; press and hold (without zooming) for the menu.
+          <div
+            className="viewer-image zoomable"
+            {...zoom.handlers}
+            onContextMenu={hold.onContextMenu}
+            onPointerLeave={hold.onPointerLeave}
+            onPointerDown={(e) => {
+              zoom.handlers.onPointerDown(e);
+              if (zoom.pinching()) press.cancel();
+              else hold.onPointerDown(e);
+            }}
+            onPointerMove={(e) => {
+              zoom.handlers.onPointerMove(e);
+              hold.onPointerMove(e);
+            }}
+            onPointerUp={(e) => {
+              zoom.handlers.onPointerUp(e);
+              hold.onPointerUp(e);
+            }}
+            onPointerCancel={(e) => {
+              zoom.handlers.onPointerCancel(e);
+              hold.onPointerCancel(e);
+            }}
+          >
+            {url && <img src={url} alt={photo.label ?? photo.fileName} draggable={false} style={zoom.style} />}
           </div>
         )}
         <div className="viewer-info">

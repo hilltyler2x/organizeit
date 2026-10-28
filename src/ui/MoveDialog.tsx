@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
+import { PhotoZoom } from "./PhotoZoom";
 import { Thumb } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
 
@@ -23,6 +24,7 @@ export function MoveDialog(props: {
 }) {
   const [section, setSection] = useState<Section>(props.defaultSection);
   const [name, setName] = useState("");
+  const [zoomAt, setZoomAt] = useState<number | null>(null);
   const trimmed = name.trim();
   const banned = trimmed !== "" && isBannedCategoryName(trimmed);
   const match = useMemo(
@@ -49,11 +51,19 @@ export function MoveDialog(props: {
           </div>
         ) : props.preview && props.preview.length > 0 && (
           <ul className={`move-preview ${props.preview.length === 1 ? "single" : ""}`}>
-            {props.preview.slice(0, 8).map((p) => (
-              <li key={p.id}><Thumb photo={p} alt={p.label ?? p.fileName} /></li>
+            {props.preview.slice(0, 8).map((p, i) => (
+              <li key={p.id}>
+                <button className="preview-open" aria-label={`Look closer at ${p.label ?? p.fileName}`} onClick={() => setZoomAt(i)}>
+                  <Thumb photo={p} alt={p.label ?? p.fileName} />
+                </button>
+              </li>
             ))}
           </ul>
         )}
+        {props.preview && props.preview.length > 0 && !(props.preview.length === 1 && props.preview[0].isVideo) && (
+          <p className="muted small zoom-hint">Tap the {props.preview.length === 1 ? "photo" : "photos"} to look closer.</p>
+        )}
+        {zoomAt !== null && props.preview && <PhotoZoom photos={props.preview.slice(0, 8)} start={zoomAt} onClose={() => setZoomAt(null)} />}
         {(guess || props.onDelete) && (
           <div className="guess">
             {guess && (

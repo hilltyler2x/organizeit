@@ -88,8 +88,10 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
    (to any category or a new one), bulk delete, rename or merge categories. Categories the AI
    created are removed automatically once they're empty; the starting ones stay.
 
-Photos waiting to be sorted are shown in a "Sorting…" panel. When the AI isn't confident
-(below 60%), or sorting fails, the photo goes to **To review** instead of being filed. There
+Photos waiting to be sorted are shown in a "Sorting…" panel. The AI files nearly everything
+itself: close calls get a second opinion from the stronger model and are then filed under the
+best answer (or a new specific category). Only photos it can't make out at all (below 30%), or
+that fail to sort, go to **To review** instead of being filed. There
 you tap one photo to pick its category (the AI's guess is a one-tap answer), or select
 several and send them to the same place, existing or new. To review is a to-do list, not a
 category: every photo leaves it by being filed into a real, specific category.

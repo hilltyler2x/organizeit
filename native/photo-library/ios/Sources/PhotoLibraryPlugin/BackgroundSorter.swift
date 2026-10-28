@@ -474,7 +474,7 @@ public final class BackgroundSorter {
                         sorted += 1
                         // Same threshold as REVIEW_BELOW in src/core/library.ts.
                         let named = CategoryName(section: result.section, name: result.category)
-                        if result.confidence >= 0.6 && !categories.contains(named) { categories.append(named) }
+                        if result.confidence >= 0.3 && !categories.contains(named) { categories.append(named) }
                         left = max(0, left - 1)
                         progress?(left)
                     case .failure(.skip):

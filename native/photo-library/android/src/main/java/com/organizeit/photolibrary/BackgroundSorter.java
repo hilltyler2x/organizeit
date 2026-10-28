@@ -91,7 +91,7 @@ final class BackgroundSorter {
     private static final AtomicBoolean running = new AtomicBoolean(false);
     private static final int BATCH = 3;
     /** Same threshold as REVIEW_BELOW in src/core/library.ts. */
-    private static final double REVIEW_BELOW = 0.6;
+    private static final double REVIEW_BELOW = 0.3;
 
     private final Context context;
     private final BackgroundSortStore store;

@@ -109,7 +109,7 @@ Some items are videos. A video is shown as one image with four frames taken acro
 
 The label is a few words describing the specific thing shown.
 
-Confidence is between 0 and 1 and decides whether the person is asked to check your answer. Give below 0.6 when you can't really tell: the item is blurry, cut off or hidden, it could belong to two categories, or it isn't clear whether a screenshot is a business expense. Even then, give your best specific guess.
+Your answer is filed automatically: sorting the whole camera roll without the person's help is the point of the app, so commit to the best answer. When a photo could fit two categories, pick the more likely one; when it isn't clear whether a screenshot is a business expense, decide from what it shows; when nothing existing fits, make a new specific category. Confidence is between 0 and 1. Give 0.5 to 0.75 for such close calls, and higher when it's plain. Only give below 0.3 when you truly can't make out what the photo shows (black, blank, or blurred beyond recognition); just those few are handed to the person to check. Even then, give your best specific guess.
 
 You may be given corrections the person made to earlier sorts. They show how this person wants things filed and outrank your own judgement: when a photo looks like one of those items, use the category they chose, and avoid the mistake that was corrected.`;
 

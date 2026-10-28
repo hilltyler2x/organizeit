@@ -83,6 +83,63 @@ jobs:
             iPhone: install OrganizeIt-test.ipa with Sideloadly. Android: open this page on the phone and install OrganizeIt-test.apk.
           files: OrganizeIt-test.apk
 
+  # The Google Play release: a signed app bundle (.aab) with the run number as its build number.
+  # Signs once the four ANDROID_* secrets hold the upload key, and on main sends the bundle to
+  # Play's internal testing track once PLAY_SERVICE_ACCOUNT_JSON is set too. Play only takes a
+  # brand-new app's very first bundle by hand, so the bundle is also kept as a download.
+  play:
+    needs: [test]
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      ANDROID_VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build:app
+      - name: Install upload key
+        id: key
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Play bundle left unsigned: add ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD as repository secrets."
+          fi
+      - name: Build release bundle
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon
+      - run: cp android/app/build/outputs/bundle/release/app-release.aab OrganizeIt-play-${{ github.run_number }}.aab
+      - uses: actions/upload-artifact@v4
+        if: steps.key.outputs.signed
+        with:
+          name: OrganizeIt-play-bundle
+          path: OrganizeIt-play-${{ github.run_number }}.aab
+      - name: Upload to Google Play (internal testing)
+        if: steps.key.outputs.signed && env.PLAY_SERVICE_ACCOUNT_JSON != '' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.organizeit.app
+          releaseFiles: OrganizeIt-play-${{ github.run_number }}.aab
+          track: internal
+          # "draft" until the app's first release is out of draft in Play Console; then set the
+          # PLAY_RELEASE_STATUS repository variable to "completed" so builds reach testers on their own.
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+
   ios:
     # Xcode 26 (iOS 26 SDK), like the TestFlight build, so background sorting's iOS 26 code is compiled here too.
     runs-on: macos-26

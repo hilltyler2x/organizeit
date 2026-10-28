@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
 import { Thumb } from "./Thumb";
+import { VideoPlayer } from "./VideoPlayer";
 
 export type MoveTarget = { categoryId: string } | { section: Section; name: string };
 
@@ -44,7 +45,7 @@ export function MoveDialog(props: {
         {props.preview && props.preview.length > 0 && (
           <ul className={`move-preview ${props.preview.length === 1 ? "single" : ""}`}>
             {props.preview.slice(0, 8).map((p) => (
-              <li key={p.id}><Thumb photo={p} alt={p.label ?? p.fileName} /></li>
+              <li key={p.id}>{p.isVideo && props.preview!.length === 1 ? <VideoPlayer photo={p} /> : <Thumb photo={p} alt={p.label ?? p.fileName} />}</li>
             ))}
           </ul>
         )}
@@ -64,7 +65,7 @@ export function MoveDialog(props: {
             )}
             {props.onDelete && (
               <button className="chip danger" onClick={props.onDelete}>
-                {props.count === 1 ? "Delete photo" : `Delete ${props.count} photos`}
+                {props.count === 1 ? (props.preview?.[0]?.isVideo ? "Delete video" : "Delete photo") : `Delete ${props.count} photos`}
               </button>
             )}
           </div>

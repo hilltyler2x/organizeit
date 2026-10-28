@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import {
   applyClassifications,
-  fileConfidentReviews,
+  requeueForResort,
+  SORT_VERSION,
   markCategorySeen,
   mergeLookAlikeCategories,
   movePhotos,
@@ -138,30 +139,11 @@ export function useLibrary() {
         const byId = new Map(requeue.map((p) => [p.id, p]));
         photos = photos.map((p) => byId.get(p.id) ?? p);
       }
-      // Photos left in the review list under the older, stricter threshold are filed under
-      // the AI's guess when it is now confident enough.
-      const filed = fileConfidentReviews({ photos, categories }, newId);
-      if (filed) {
-        await Promise.all([
-          store.putPhotos(filed.putPhotos),
-          filed.putCategories.length ? store.putCategories(filed.putCategories) : null,
-          filed.deletedCategoryIds.length ? store.deleteCategories(filed.deletedCategoryIds) : null,
-        ]);
-        ({ photos, categories } = filed.state);
-      }
-      // Fold together categories that mean the same thing, from before this was enforced or
-      // made by an older build ("Shoes" and "Sneakers", "Tee" and "Shirts").
-      const tidy = mergeLookAlikeCategories({ photos, categories });
-      if (tidy.merged.size) {
-        ({ photos, categories } = tidy.state);
-        const relinked = relinkLessons(lessons, tidy.merged, categories);
-        const byId = new Map(relinked.map((l) => [l.id, l]));
-        lessonsRef.current = lessons.map((l) => byId.get(l.id) ?? l);
-        await Promise.all([
-          store.putPhotos(tidy.putPhotos),
-          store.deleteCategories(tidy.deletedCategoryIds),
-          relinked.length ? store.saveLessons(relinked, []) : null,
-        ]);
+      // Photos an older sorter left for the person are sorted again by the current one.
+      const resort = requeueForResort({ photos, categories });
+      if (resort) {
+        await store.putPhotos(resort.putPhotos);
+        photos = resort.state.photos;
       }
       stateRef.current = { photos, categories };
       setState(stateRef.current);
@@ -279,7 +261,7 @@ export function useLibrary() {
     if (unreadable.length) {
       await markAll(unreadable.map((p) => p.id), (p) => {
         const err = (images[group.indexOf(p)] as { err: unknown }).err;
-        return { status: "error", error: err instanceof Error ? err.message : String(err) };
+        return { status: "error", sortVersion: SORT_VERSION, error: err instanceof Error ? err.message : String(err) };
       });
     }
     if (!ready.length) return;
@@ -305,7 +287,7 @@ export function useLibrary() {
       if (filed.length) await commit(applyClassifications(stateRef.current, filed, newId));
       const failed = ready.filter((_, i) => "error" in results[i]);
       if (failed.length) {
-        await markAll(failed.map((p) => p.id), (p) => ({ status: "error", error: (results[ready.indexOf(p)] as { error: string }).error }));
+        await markAll(failed.map((p) => p.id), (p) => ({ status: "error", sortVersion: SORT_VERSION, error: (results[ready.indexOf(p)] as { error: string }).error }));
       }
       serverAnswered();
       recordFinished(ready.length);
@@ -358,7 +340,9 @@ export function useLibrary() {
       const tries = new Map(ready.map((p) => [p.id, (attempts.current.get(p.id) ?? 0) + 1]));
       for (const [id, n] of tries) attempts.current.set(id, n);
       await markAll(ready.map((p) => p.id), (p) =>
-        retryable && tries.get(p.id)! < 4 ? { status: "queued", error: undefined } : { status: "error", error: message },
+        // A connection that kept failing is tried again on the next launch; a photo the server
+        // turned down is not, until the sorter improves.
+        retryable && tries.get(p.id)! < 4 ? { status: "queued", error: undefined } : { status: "error", ...(retryable ? {} : { sortVersion: SORT_VERSION }), error: message },
       );
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
     }

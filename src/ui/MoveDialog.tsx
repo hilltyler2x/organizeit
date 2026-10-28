@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
 import { Thumb } from "./Thumb";
+import { VideoPlayer } from "./VideoPlayer";
 
 export type MoveTarget = { categoryId: string } | { section: Section; name: string };
 
@@ -41,7 +42,12 @@ export function MoveDialog(props: {
     <div className="modal-backdrop" onClick={props.onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="Move photos" onClick={(e) => e.stopPropagation()}>
         <h2>{props.title ?? `Move ${props.count} photo${props.count === 1 ? "" : "s"}`}</h2>
-        {props.preview && props.preview.length > 0 && (
+        {props.preview?.length === 1 && props.preview[0].isVideo ? (
+          // One video: it plays right away, so the person can see what's in it before choosing.
+          <div className="move-video">
+            <VideoPlayer photo={props.preview[0]} />
+          </div>
+        ) : props.preview && props.preview.length > 0 && (
           <ul className={`move-preview ${props.preview.length === 1 ? "single" : ""}`}>
             {props.preview.slice(0, 8).map((p) => (
               <li key={p.id}><Thumb photo={p} alt={p.label ?? p.fileName} /></li>

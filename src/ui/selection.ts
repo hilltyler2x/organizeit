@@ -60,6 +60,11 @@ export function useLongPress(onHold: (id: string) => void) {
         if (!touch.current) onHold(id); // a touch hold already opened it
       },
     }),
+    /** Stop a hold that has started, e.g. when a second finger turns it into a pinch. */
+    cancel: () => {
+      window.clearTimeout(timer.current);
+      start.current = null;
+    },
     consumed: () => {
       const was = held.current;
       held.current = false;

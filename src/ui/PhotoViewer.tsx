@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { formatBytes, formatDuration } from "../core/storage";
 import type { Category, Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
@@ -33,7 +34,7 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
     }
   };
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={props.onClose}>
       <div className="viewer" role="dialog" aria-modal="true" aria-label={photo.label ?? photo.fileName} onClick={(e) => e.stopPropagation()}>
         {photo.isVideo ? (
@@ -120,6 +121,7 @@ export function PhotoViewer(props: { lib: Library; photo: Photo; category?: Cate
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

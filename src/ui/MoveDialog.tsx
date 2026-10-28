@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
 import { PhotoZoom } from "./PhotoZoom";
@@ -25,6 +26,15 @@ export function MoveDialog(props: {
   const [section, setSection] = useState<Section>(props.defaultSection);
   const [name, setName] = useState("");
   const [zoomAt, setZoomAt] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // Always open at the top so the question is the first thing seen, even if a video loading in nudges the scroll.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    const id = requestAnimationFrame(() => (el.scrollTop = 0));
+    return () => cancelAnimationFrame(id);
+  }, []);
   const trimmed = name.trim();
   const banned = trimmed !== "" && isBannedCategoryName(trimmed);
   const match = useMemo(
@@ -40,10 +50,11 @@ export function MoveDialog(props: {
     .filter((c) => c.section === section && c.id !== props.currentCategoryId)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return (
+  // Drawn on top of the whole app, so the top bar never covers the title.
+  return createPortal(
     <div className="modal-backdrop" onClick={props.onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Move photos" onClick={(e) => e.stopPropagation()}>
-        <h2>{props.title ?? `Move ${props.count} photo${props.count === 1 ? "" : "s"}`}</h2>
+      <div ref={box} className="modal" role="dialog" aria-modal="true" aria-label="Move photos" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title">{props.title ?? `Move ${props.count} photo${props.count === 1 ? "" : "s"}`}</h2>
         {props.preview?.length === 1 && props.preview[0].isVideo ? (
           // One video: it plays right away, so the person can see what's in it before choosing.
           <div className="move-video">
@@ -121,6 +132,7 @@ export function MoveDialog(props: {
           <button onClick={props.onClose}>Cancel</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

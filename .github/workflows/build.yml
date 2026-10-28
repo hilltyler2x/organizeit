@@ -85,7 +85,7 @@ jobs:
 
   # The Google Play release: a signed app bundle (.aab) with the run number as its build number.
   # Signs once the four ANDROID_* secrets hold the upload key, and on main sends the bundle to
-  # Play's internal testing track once PLAY_SERVICE_ACCOUNT_JSON is set too. Play only takes a
+  # Play's internal testing track once PLAY_SERVICE_ACCOUNT_JSON and the PLAY_UPLOAD variable are set. Play only takes a
   # brand-new app's very first bundle by hand, so the bundle is also kept as a download.
   play:
     needs: [test]
@@ -128,8 +128,10 @@ jobs:
         with:
           name: OrganizeIt-play-bundle
           path: OrganizeIt-play-${{ github.run_number }}.aab
+      # Turned on by the PLAY_UPLOAD repository variable ("true") once the app exists in Play
+      # Console and its first bundle was uploaded by hand; until then the upload would fail.
       - name: Upload to Google Play (internal testing)
-        if: steps.key.outputs.signed && env.PLAY_SERVICE_ACCOUNT_JSON != '' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+        if: steps.key.outputs.signed && env.PLAY_SERVICE_ACCOUNT_JSON != '' && vars.PLAY_UPLOAD == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}

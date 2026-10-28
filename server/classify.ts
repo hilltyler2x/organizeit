@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { isBannedCategoryName, pickCategoryName } from "../src/core/categories";
+import { findMatchingCategory, isBannedCategoryName, pickCategoryName } from "../src/core/categories";
 import type { Classification, Section } from "../src/core/types";
 
 // Two passes keep the AI bill low: every photo goes to a fast, cheap model first, and only the
@@ -101,6 +101,7 @@ Pick one section:
 
 Then pick one category inside that section:
 - Reuse an existing category when the photo fits it. Use the exact existing name.
+- Never make a new category that means the same as an existing one: not a synonym (Shoes when Sneakers exists, Tees when Shirts exists, Cologne when Fragrance exists), not a singular or plural or spelling of it, and not a narrower kind of it (Basketball Shorts when Shorts exists, Gas Receipts when Receipts exists). Use the existing name instead.
 - If nothing fits, invent a new category: a short, specific, plural Title Case name for the kind of item or document (for example Sneakers, Sunglasses, Jewelry, Phone Cases, Hoodies, Shipping Labels, Pets, Food).
 - Never answer with a catch-all such as Other, Misc, Miscellaneous, Uncategorized, Unknown, General, Assorted, or Various, and never prefix a name with them. Even when unsure, name the most specific kind of thing you can see.
 - Product categories are by item type, not brand or color.
@@ -115,7 +116,13 @@ You may be given corrections the person made to earlier sorts. They show how thi
 
 function categoryList(categories: ClassifyRequest["categories"]): string {
   const by: Record<Section, string[]> = { business: [], products: [], personal: [] };
-  for (const c of categories) if (!isBannedCategoryName(c.name)) by[c.section].push(c.name);
+  const shown: ClassifyRequest["categories"] = [];
+  for (const c of categories) {
+    // Look-alike names (a phone may still list "Shoes" next to "Sneakers") are shown once.
+    if (isBannedCategoryName(c.name) || findMatchingCategory(shown, c.section, c.name)) continue;
+    shown.push(c);
+    by[c.section].push(c.name);
+  }
   return (Object.keys(by) as Section[])
     .map((s) => `${s}: ${by[s].length ? by[s].join(", ") : "(none yet)"}`)
     .join("\n");
@@ -176,10 +183,14 @@ async function ask(client: Anthropic, model: string, messages: Messages): Promis
   return { answer: parsed.data, raw };
 }
 
-function toClassification(answer: z.infer<typeof ModelAnswer>, category: string): Classification {
+/**
+ * Builds the answer sent back, with the category swapped for an existing one that means the
+ * same thing ("Tees" -> "Shirts"), so a look-alike never reaches the phone as a new name.
+ */
+function toClassification(answer: z.infer<typeof ModelAnswer>, category: string, categories: ClassifyRequest["categories"]): Classification {
   return {
     section: answer.section,
-    category,
+    category: findMatchingCategory(categories, answer.section, category)?.name ?? category,
     label: answer.label.slice(0, 120),
     confidence: Math.max(0, Math.min(1, answer.confidence)),
   };
@@ -219,7 +230,7 @@ async function classifyOne(client: Anthropic, model: string, req: ClassifyReques
     name = pickCategoryName(answer.category, answer.label);
   }
   if (!name) throw new ClassifyError("Could not find a specific category for this photo.", 422);
-  return toClassification(answer, name);
+  return toClassification(answer, name, req.categories);
 }
 
 export type BatchResult = Classification | { error: string };
@@ -285,7 +296,7 @@ async function classifyWith(client: Anthropic, model: string, req: ClassifyBatch
     req.photos.map(async (photo, i) => {
       const answer = answers.get(i + 1);
       const name = answer && pickCategoryName(answer.category, answer.label);
-      return answer && name ? toClassification(answer, name) : single(photo);
+      return answer && name ? toClassification(answer, name, req.categories) : single(photo);
     }),
   );
 }

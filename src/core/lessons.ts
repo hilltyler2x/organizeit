@@ -74,3 +74,12 @@ export function lessonsForPrompt(lessons: Lesson[], categories: Category[], limi
   }
   return out;
 }
+
+/** Points lessons at the category their own one was merged into. Returns only the changed ones. */
+export function relinkLessons(lessons: Lesson[], merged: Map<string, string>, categories: Category[]): Lesson[] {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  return lessons.flatMap((l) => {
+    const to = byId.get(merged.get(l.categoryId) ?? "");
+    return to ? [{ ...l, categoryId: to.id, section: to.section, category: to.name }] : [];
+  });
+}

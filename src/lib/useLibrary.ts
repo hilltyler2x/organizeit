@@ -3,6 +3,7 @@ import { seedCategories } from "../core/categories";
 import {
   applyClassifications,
   markCategorySeen,
+  mergeLookAlikeCategories,
   movePhotos,
   removePhotos,
   renameCategory,
@@ -12,7 +13,7 @@ import {
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
 import { isOldFingerprint, markNotDuplicate, pairsToLookAt, setHashes, setPairVerdicts } from "../core/duplicates";
-import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
+import { addLessons, lessonsForPrompt, lessonsFromMove, relinkLessons } from "../core/lessons";
 import { SORTED_ENOUGH, freedEnough } from "../core/reviews";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
@@ -135,6 +136,20 @@ export function useLibrary() {
         await store.putPhotos(requeue);
         const byId = new Map(requeue.map((p) => [p.id, p]));
         photos = photos.map((p) => byId.get(p.id) ?? p);
+      }
+      // Fold together categories that mean the same thing, from before this was enforced or
+      // made by an older build ("Shoes" and "Sneakers", "Tee" and "Shirts").
+      const tidy = mergeLookAlikeCategories({ photos, categories });
+      if (tidy.merged.size) {
+        ({ photos, categories } = tidy.state);
+        const relinked = relinkLessons(lessons, tidy.merged, categories);
+        const byId = new Map(relinked.map((l) => [l.id, l]));
+        lessonsRef.current = lessons.map((l) => byId.get(l.id) ?? l);
+        await Promise.all([
+          store.putPhotos(tidy.putPhotos),
+          store.deleteCategories(tidy.deletedCategoryIds),
+          relinked.length ? store.saveLessons(relinked, []) : null,
+        ]);
       }
       stateRef.current = { photos, categories };
       setState(stateRef.current);

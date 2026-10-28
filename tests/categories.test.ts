@@ -83,3 +83,68 @@ describe("resolveCategory", () => {
     expect(resolveCategory(cats, "business", "Order Confirmation", newId).category.name).toBe("Order Confirmations");
   });
 });
+
+describe("no duplicate or look-alike categories", () => {
+  const cats = seedCategories(newId);
+  const withNew = (...names: string[]) => {
+    let list = cats;
+    for (const name of names) list = [...list, resolveCategory(list, "products", name, newId).category];
+    return list;
+  };
+
+  it.each([
+    ["Tee Shirts", "Shirts"], ["Men's T-Shirts", "Shirts"], ["Polo Shirts", "Shirts"], ["Graphic Tees", "Shirts"],
+    ["Cardholders", "Card Holders"], ["Leather Card Holders", "Card Holders"], ["Basketball Shorts", "Shorts"],
+    ["Hats & Caps", "Hats"], ["Snapbacks", "Hats"], ["Knit Caps", "Beanies"], ["Winter Hats", "Beanies"],
+    ["Perfumes", "Fragrance"], ["Women's Handbags", "Bags"], ["Belt Bags", "Bags"], ["Vintage Bags", "Bags"],
+    ["Bag Photos", "Bags"], ["Bifold Wallets", "Wallets"], ["Card Wallets", "Card Holders"], ["Sweatpants", "Pants"],
+    ["Tracksuits", "Clothing Sets"], ["Plushies", "Toys"], ["Stuffed Animals", "Toys"],
+  ])("files %j under existing %j", (input, expected) => {
+    const r = resolveCategory(cats, "products", input, newId);
+    expect(r.created).toBe(false);
+    expect(r.category.name).toBe(expected);
+  });
+
+  it.each([
+    ["Shoes", "Sneakers"], ["Running Shoes", "Sneakers"], ["Footwear", "Sneakers"], ["sneaker", "Sneakers"],
+    ["Shades", "Sunglasses"], ["Jewellery", "Jewelry"], ["iPhone Cases", "Phone Cases"], ["Hoody", "Hoodies"],
+  ])("files %j under a created %j", (input, existing) => {
+    const list = withNew(existing);
+    const r = resolveCategory(list, "products", input, newId);
+    expect(r.created).toBe(false);
+    expect(r.category.name).toBe(existing);
+  });
+
+  it("names a new category after its group, so the next look-alike finds it", () => {
+    const first = resolveCategory(cats, "products", "Shoes", newId);
+    expect(first.category.name).toBe("Sneakers");
+    expect(resolveCategory([...cats, first.category], "products", "Trainers", newId).category.id).toBe(first.category.id);
+  });
+
+  it("matches narrower business records", () => {
+    expect(resolveCategory(cats, "business", "Gas Receipts", newId).category.name).toBe("Receipts");
+    expect(resolveCategory(cats, "business", "Amazon Order Confirmations", newId).category.name).toBe("Order Confirmations");
+    expect(resolveCategory(cats, "business", "Checkout Screens", newId).category.name).toBe("Payment Screens");
+    expect(resolveCategory(cats, "business", "Receipt Screenshots", newId).category.name).toBe("Receipts");
+  });
+
+  it.each(["Lego Sets", "Bottle Caps", "Golf Tees", "Boots", "Sweaters", "Jackets", "Skirts", "Gloves", "Dress Socks Box"])(
+    "still creates a specific new category for %j",
+    (input) => {
+      const r = resolveCategory(cats, "products", input, newId);
+      expect(r.created).toBe(true);
+    },
+  );
+
+  it("keeps the seed categories apart from each other", () => {
+    for (const c of cats) {
+      const others = cats.filter((o) => o.id !== c.id);
+      expect(resolveCategory(others, c.section, c.name, newId).created).toBe(true);
+    }
+  });
+
+  it("only merges narrower kinds outside Personal", () => {
+    const pets = resolveCategory(cats, "personal", "Dogs", newId).category;
+    expect(resolveCategory([...cats, pets], "personal", "Hot Dogs", newId).created).toBe(true);
+  });
+});

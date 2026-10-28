@@ -1,5 +1,5 @@
 import { emptyCreatedCategories } from "./storage";
-import { isBannedCategoryName, resolveCategory } from "./categories";
+import { findMatchingCategory, isBannedCategoryName, resolveCategory } from "./categories";
 import type { Category, Classification, Photo, Section } from "./types";
 
 /** One photo or video as the device's photo library reports it. */
@@ -213,4 +213,40 @@ export function syncWithDevice(state: LibraryState, assets: DeviceAsset[], newId
   const goneIds = new Set(gone);
   const photos = [...state.photos.filter((p) => !goneIds.has(p.id)), ...added];
   return finish(state, photos, state.categories, added, [], gone);
+}
+
+/**
+ * Folds categories that mean the same thing into one ("Shoes" into "Sneakers", "Tee" into
+ * "Shirts", "Basketball Shorts" into "Shorts"), moving their photos across. Seeded categories
+ * win, then the broader name, then the oldest. `merged` maps each removed id to the id its
+ * photos went to, so lessons can follow.
+ */
+export function mergeLookAlikeCategories(state: LibraryState): Change & { merged: Map<string, string> } {
+  const order = [...state.categories].sort(
+    (a, b) =>
+      Number(b.seeded) - Number(a.seeded) ||
+      a.name.trim().split(/\s+/).length - b.name.trim().split(/\s+/).length ||
+      a.createdAt - b.createdAt,
+  );
+  const kept: Category[] = [];
+  const merged = new Map<string, string>();
+  for (const c of order) {
+    const into = findMatchingCategory(kept, c.section, c.name);
+    if (into) merged.set(c.id, into.id);
+    else kept.push(c);
+  }
+  if (!merged.size) {
+    return { state, putPhotos: [], putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [], merged };
+  }
+  const changed: Photo[] = [];
+  const photos = state.photos.map((p) => {
+    const to = p.categoryId && merged.get(p.categoryId);
+    if (!to) return p;
+    const next = { ...p, categoryId: to };
+    changed.push(next);
+    return next;
+  });
+  // Keep the original order of the list; the merged-away ones simply drop out.
+  const categories = state.categories.filter((c) => !merged.has(c.id));
+  return { state: { photos, categories }, putPhotos: changed, putCategories: [], deletedCategoryIds: [...merged.keys()], deletedPhotoIds: [], merged };
 }

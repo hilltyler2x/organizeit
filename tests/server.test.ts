@@ -37,6 +37,17 @@ async function post(app: ReturnType<typeof createApp>, body: object, headers: Re
 const req = { image: "aGVsbG8=", mediaType: "image/jpeg", fileName: "IMG_1.jpg", width: 1170, height: 2532, categories: [{ section: "products", name: "Bags" }] };
 
 describe("POST /api/classify", () => {
+  it("answers with the existing category when the AI names a look-alike", async () => {
+    const { client, calls } = fakeClient([{ section: "products", category: "Shoes", label: "Nike Dunk Low", confidence: 0.9 }]);
+    const cats = [{ section: "products", name: "Bags" }, { section: "products", name: "Sneakers" }, { section: "products", name: "Sneaker" }];
+    const r = await post(createApp(client), { ...req, categories: cats });
+    expect(r.body.category).toBe("Sneakers");
+    // Look-alikes the phone still lists are shown to the AI once.
+    const prompt = calls[0].messages[0].content.find((b: any) => b.type === "text").text;
+    expect(prompt).toContain("products: Bags, Sneakers\n");
+    expect(calls[0].system).toContain("Never make a new category that means the same");
+  });
+
   it("returns the classification", async () => {
     const { client, calls } = fakeClient([{ section: "business", category: "Receipts", label: "Target receipt", confidence: 0.93 }]);
     const r = await post(createApp(client), req);

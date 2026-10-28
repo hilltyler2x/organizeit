@@ -4,6 +4,7 @@ import { formatBytes, formatDuration } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { useImageUrl } from "./Thumb";
+import { VideoPlayer } from "./VideoPlayer";
 
 // Full-screen look at one set of duplicates, to check they really are copies before deleting.
 // Pinch or double-tap to zoom, drag to look around a zoomed photo, and swipe (or use the arrow
@@ -70,7 +71,8 @@ export function DuplicateInspector(props: {
   };
 
   const onDown = (e: PointerEvent) => {
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // A video needs its own taps (to show its controls), so the stage doesn't capture them.
+    if (!photo.isVideo) (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 1) gesture.current = null;
     begin();
@@ -82,6 +84,7 @@ export function DuplicateInspector(props: {
     const g = gesture.current;
     const c = center();
     if (Math.hypot(c.x - g.x, c.y - g.y) > 6 || (c.dist && Math.abs(c.dist - g.dist) > 6)) g.moved = true;
+    if (photo.isVideo) return; // videos aren't zoomed; a swipe still goes to the next copy
     if (pointers.current.size > 1 && g.dist) {
       const scale = Math.max(1, Math.min(MAX_ZOOM, (g.view.scale * c.dist) / g.dist));
       setView(scale === 1 ? FIT : { scale, x: g.view.x + (c.x - g.x), y: g.view.y + (c.y - g.y) });
@@ -108,7 +111,7 @@ export function DuplicateInspector(props: {
         return;
       }
     }
-    if (g.moved) return;
+    if (g.moved || photo.isVideo) return;
     // Double tap: zoom in on that spot, or back out.
     const now = Date.now();
     if (now - lastTap.current < 300) {
@@ -173,7 +176,7 @@ export function DuplicateInspector(props: {
           <dt>File</dt>
           <dd>{photo.fileName}</dd>
         </dl>
-        <p className="muted small">Pinch or double-tap to zoom. Swipe to see the other copies.</p>
+        <p className="muted small">{photo.isVideo ? "Tap the video for pause and sound." : "Pinch or double-tap to zoom."} Swipe to see the other copies.</p>
         <div className="inspector-actions">
           <button className="big" onClick={props.onClose}>Close</button>
           <button className="danger big" disabled={props.busy} onClick={() => props.onDelete(photo)}>Delete</button>
@@ -185,8 +188,13 @@ export function DuplicateInspector(props: {
 }
 
 function InspectorImage({ photo, view }: { photo: Photo; view: View }) {
+  if (photo.isVideo) return <VideoPlayer key={photo.id} photo={photo} />;
+  return <InspectorStill photo={photo} view={view} />;
+}
+
+function InspectorStill({ photo, view }: { photo: Photo; view: View }) {
   const thumb = useImageUrl(photo, "thumb");
-  const full = useImageUrl(photo, photo.isVideo ? "thumb" : "full");
+  const full = useImageUrl(photo, "full");
   const src = full ?? thumb;
   if (!src) return <div className="inspector-wait">Loading…</div>;
   return (

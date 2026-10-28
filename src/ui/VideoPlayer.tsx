@@ -4,6 +4,9 @@ import type { Photo } from "../core/types";
 import { videoSource } from "../lib/media";
 import { useImageUrl } from "./Thumb";
 
+// The one video player, used everywhere a video is shown big enough to watch: the viewer,
+// the "Where does this go?" sheet in To review and the duplicates inspector.
+
 /** Plays a video; the poster frame shows while it loads, which can take a moment for a big one. */
 export function VideoPlayer({ photo }: { photo: Photo }) {
   const poster = useImageUrl(photo, "thumb");
@@ -106,7 +109,8 @@ function VideoControls({ src, poster, label }: { src: string; poster?: string; l
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setLength(e.currentTarget.duration || 0)}
       />
-      <div className="video-controls" onClick={(e) => e.stopPropagation()}>
+      {/* Kept to themselves so dragging the scrubber never counts as a swipe in the duplicates inspector. */}
+      <div className="video-controls" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
         <button className="video-btn" aria-label={playing ? "Pause" : "Play"} onClick={togglePlay}>
           <svg viewBox="0 0 24 24" aria-hidden fill="currentColor">
             {playing ? (<><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></>) : <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" />}

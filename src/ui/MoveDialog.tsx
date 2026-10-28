@@ -70,7 +70,7 @@ export function MoveDialog(props: {
             )}
             {props.onDelete && (
               <button className="chip danger" onClick={props.onDelete}>
-                {props.count === 1 ? "Delete photo" : `Delete ${props.count} photos`}
+                {props.count === 1 ? (props.preview?.[0]?.isVideo ? "Delete video" : "Delete photo") : `Delete ${props.count} photos`}
               </button>
             )}
           </div>

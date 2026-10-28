@@ -198,7 +198,8 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
           onDelete={() => deletePhotos(moving)}
           onMove={(target) =>
             run(async () => {
-              await lib.move(moving.map((p) => p.id), target);
+              const also = await lib.move(moving.map((p) => p.id), target);
+              setNotice(also ? `Also filed ${also} similar ${also === 1 ? "one" : "ones"} the same way.` : "");
               setMoving(null);
               clearSelection();
             })

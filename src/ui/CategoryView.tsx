@@ -5,7 +5,7 @@ import { SECTIONS, type Category, type Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
 import { AlbumDialog } from "./AlbumDialog";
 import { MoveDialog } from "./MoveDialog";
-import { PhotoMenu, copyAndShare, type MenuItem } from "./PhotoMenu";
+import { PhotoMenu, copyAndShare, toast, type MenuItem } from "./PhotoMenu";
 import { PhotoViewer } from "./PhotoViewer";
 import { useLongPress, useScrolledPast } from "./selection";
 import { Thumb, forgetImages } from "./Thumb";
@@ -206,7 +206,8 @@ export function CategoryView({ lib, category, onGone }: { lib: Library; category
           onMove={(target) =>
             run(async () => {
               const lastOnes = moving.length === photos.length && !category.seeded;
-              await lib.move(moving, target);
+              const also = await lib.move(moving, target);
+              if (also) toast(`Also moved ${also} similar ${also === 1 ? "one" : "ones"} the AI had put in the same place`);
               setMoving(null);
               doneWith(moving);
               if (lastOnes) onGone();

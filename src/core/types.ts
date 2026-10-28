@@ -18,6 +18,11 @@ export interface Category {
   createdAt: number;
   /** When the person last opened this category. Photos the AI files after this are "new". */
   seenAt?: number;
+  /**
+   * Names the person renamed this category away from (or merged into it by renaming). When the
+   * AI answers with one of them, the photo is filed here instead of in a new category.
+   */
+  aliases?: string[];
 }
 
 /**

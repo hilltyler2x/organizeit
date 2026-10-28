@@ -70,6 +70,9 @@ const CONCURRENCY = 4;
 const HASH_CHUNK = 40;
 const HASH_CONCURRENCY = 4;
 
+/** Errors about the passcode or subscription, which say nothing about the photo itself. */
+const ACCESS_ERROR = /passcode|subscri/i;
+
 export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
   const [ready, setReady] = useState(false);
@@ -132,8 +135,11 @@ export function useLibrary() {
         categories = seedCategories(newId);
         await store.putCategories(categories);
       }
-      // Anything interrupted mid-classification goes back in the queue.
-      const requeue = photos.filter((p) => p.status === "classifying").map((p) => ({ ...p, status: "queued" as const }));
+      // Anything interrupted mid-classification goes back in the queue, and so does anything
+      // turned away over the passcode or subscription rather than the photo itself.
+      const requeue = photos
+        .filter((p) => p.status === "classifying" || (p.status === "error" && ACCESS_ERROR.test(p.error ?? "")))
+        .map((p) => ({ ...p, status: "queued" as const, error: undefined }));
       if (requeue.length) {
         await store.putPhotos(requeue);
         const byId = new Map(requeue.map((p) => [p.id, p]));
@@ -304,6 +310,12 @@ export function useLibrary() {
         // The server couldn't reach the subscription service: try again shortly.
         await backToQueue();
         await new Promise((r) => setTimeout(r, 10_000));
+        return;
+      }
+      if (err instanceof ApiError && err.reason === "locked-out") {
+        // Too many wrong passcodes from this network: nothing wrong with the photos.
+        await backToQueue();
+        await new Promise((r) => setTimeout(r, 60_000));
         return;
       }
       if (err instanceof ApiError && err.status === 401) {
@@ -530,7 +542,8 @@ export function useLibrary() {
   // categories and the lessons. Sent shortly after anything changes, and right away when the
   // app is being closed.
   const syncBackground = useCallback(() => {
-    if (!isNativeApp || !API || !scanned.current) return;
+    // Without the phone's id the server can't tell the owner's phone from any other.
+    if (!isNativeApp || !API || !scanned.current || !currentUserId()) return;
     const s = stateRef.current;
     BackgroundSort.configure({
       apiUrl: API,

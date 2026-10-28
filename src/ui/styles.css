@@ -310,6 +310,9 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
 .guess-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 14px; }
 .guess { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
 .chip.primary .small { font-weight: 400; opacity: 0.85; }
+.move-video { background: #000; border-radius: 10px; overflow: hidden; display: grid; place-items: center; margin: 0 0 14px; }
+.move-video video, .move-video img { width: 100%; max-height: 40vh; max-height: 40dvh; object-fit: contain; background: #000; }
+.move-video .video-wait { color: #fff; opacity: 0.8; font-size: 0.9rem; padding: 40px 0; }
 .move-preview { list-style: none; padding: 0; margin: 0 0 14px; display: flex; gap: 6px; flex-wrap: wrap; }
 .move-preview li { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; background: var(--surface-2); }
 .move-preview.single li { width: 100%; height: auto; max-height: 260px; aspect-ratio: auto; }

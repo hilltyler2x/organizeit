@@ -57,6 +57,11 @@ export interface Photo {
   /** Length of a video in milliseconds. */
   durationMs?: number;
   /**
+   * Which version of the sorter last looked at this photo (SORT_VERSION in core/library.ts).
+   * Photos left for the person by an older sorter are sorted again once by the newer one.
+   */
+  sortVersion?: number;
+  /**
    * Fingerprint of what the photo looks like (16 hex digits), used to spot duplicates. Not set
    * until worked out; an empty string means the image couldn't be read.
    */

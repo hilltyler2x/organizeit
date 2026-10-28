@@ -53,6 +53,12 @@ function finish(prev: LibraryState, photos: Photo[], categories: Category[], put
 export const REVIEW_BELOW = 0.3;
 
 /**
+ * Bumped when sorting gets meaningfully better (prompt, threshold, video frames), so photos an
+ * older sorter left for the person are tried again. 2: low review threshold and six-frame videos.
+ */
+export const SORT_VERSION = 2;
+
+/**
  * Files a classified photo, creating its category if needed. Throws on catch-all names. When
  * the AI isn't confident the photo waits for the person to choose, with the AI's guess kept
  * as a suggestion; no category is created for a guess.
@@ -63,7 +69,7 @@ export function applyClassification(state: LibraryState, photoId: string, result
     let updated: Photo | undefined;
     const photos = state.photos.map((p) => {
       if (p.id !== photoId) return p;
-      updated = { ...p, status: "review", categoryId: undefined, label: result.label, confidence: result.confidence, suggestion, error: undefined };
+      updated = { ...p, status: "review", sortVersion: SORT_VERSION, categoryId: undefined, label: result.label, confidence: result.confidence, suggestion, error: undefined };
       return updated;
     });
     return finish(state, photos, state.categories, updated ? [updated] : [], []);
@@ -73,7 +79,7 @@ export function applyClassification(state: LibraryState, photoId: string, result
   let updated: Photo | undefined;
   const photos = state.photos.map((p) => {
     if (p.id !== photoId) return p;
-    updated = { ...p, status: "sorted", categoryId: category.id, filedAt: now, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
+    updated = { ...p, status: "sorted", sortVersion: SORT_VERSION, categoryId: category.id, filedAt: now, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
     return updated;
   });
   return finish(state, photos, categories, updated ? [updated] : [], created ? [category] : []);
@@ -92,7 +98,7 @@ export function applyClassifications(state: LibraryState, results: { photoId: st
     } catch (err) {
       // A catch-all answer is never filed; the photo is left for the person instead.
       const error = err instanceof Error ? err.message : String(err);
-      next = { ...next, photos: next.photos.map((p) => (p.id === photoId ? { ...p, status: "error", error } : p)) };
+      next = { ...next, photos: next.photos.map((p) => (p.id === photoId ? { ...p, status: "error", sortVersion: SORT_VERSION, error } : p)) };
     }
     changed.add(photoId);
   }
@@ -160,16 +166,21 @@ export function markCategorySeen(state: LibraryState, categoryId: string, now: n
 }
 
 /**
- * Files photos left waiting under an older, stricter threshold whose guess is now confident
- * enough, so the review list shrinks without sorting them again.
+ * Photos left for the person (unsure or failed) by an older version of the sorter are queued
+ * to be sorted again by the current one, so a pile built up under stricter rules or a weaker
+ * video reader drains by itself instead of being sorted by hand. Each photo gets this once
+ * per sorter version: what the current sorter still can't place stays for the person.
  */
-export function fileConfidentReviews(state: LibraryState, newId: () => string): Change | null {
-  const results = state.photos.flatMap((p) =>
-    p.status === "review" && p.suggestion && (p.confidence ?? 0) >= REVIEW_BELOW
-      ? [{ photoId: p.id, result: { ...p.suggestion, label: p.label ?? p.suggestion.category, confidence: p.confidence! } }]
-      : [],
-  );
-  return results.length ? applyClassifications(state, results, newId) : null;
+export function requeueForResort(state: LibraryState): Change | null {
+  const putPhotos: Photo[] = [];
+  const photos = state.photos.map((p) => {
+    if ((p.status !== "review" && p.status !== "error") || (p.sortVersion ?? 0) >= SORT_VERSION) return p;
+    const next: Photo = { ...p, status: "queued", error: undefined };
+    putPhotos.push(next);
+    return next;
+  });
+  if (!putPhotos.length) return null;
+  return { state: { ...state, photos }, putPhotos, putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [] };
 }
 
 /** Photos waiting for the person: the AI wasn't sure, or sorting failed. */

@@ -142,7 +142,11 @@ was unsure about still go to To review and the core rule still holds.
   which can be stopped from there. While the app is open it sorts by itself and the task only
   follows along. Once everything is sorted it keeps watching for new photos for 5 more
   minutes before ending (only while charging).
-- **Any iPhone:** about 30 seconds of extra time right after closing, plus background refresh
+- **Any iPhone:** in the 30 seconds or so iOS gives a closed app, the waiting photos (up to
+  100 on battery, 200 while charging) are prepared and handed to iOS's background transfer
+  service (`BackgroundUploads.swift`). iOS keeps sending them to `/api/classify` while the app
+  is suspended, then wakes it briefly to keep the answers and, while charging, hand over the
+  next 200. Opening the app takes back whatever is still waiting. Plus background refresh
   and processing tasks that iOS runs when it chooses (often overnight while charging) to sort
   photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
   an app that was swiped away in the app switcher until it is opened again. Background App

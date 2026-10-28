@@ -41,7 +41,7 @@ describe("background sorting", () => {
 
   it("sends unsure answers to review instead of a category", () => {
     const c = applyBackgroundResults(start(phonePhoto("a", 1)), [
-      { asset: asset("a"), result: { section: "products", category: "Bags", label: "blurry bag", confidence: 0.3 } },
+      { asset: asset("a"), result: { section: "products", category: "Bags", label: "blurry bag", confidence: 0.2 } },
     ], newId);
     expect(c.state.photos[0].status).toBe("review");
     expect(c.state.photos[0].suggestion).toEqual({ section: "products", category: "Bags" });

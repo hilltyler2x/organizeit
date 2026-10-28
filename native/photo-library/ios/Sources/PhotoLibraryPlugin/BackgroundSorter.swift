@@ -474,7 +474,7 @@ public final class BackgroundSorter {
                         sorted += 1
                         // Same threshold as REVIEW_BELOW in src/core/library.ts.
                         let named = CategoryName(section: result.section, name: result.category)
-                        if result.confidence >= 0.6 && !categories.contains(named) { categories.append(named) }
+                        if result.confidence >= 0.3 && !categories.contains(named) { categories.append(named) }
                         left = max(0, left - 1)
                         progress?(left)
                     case .failure(.skip):
@@ -561,9 +561,9 @@ public final class BackgroundSorter {
     /// `download`: whether a photo kept only in iCloud may be downloaded (only while charging).
     private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName], download: Bool) async -> Result<Classification, SortError> {
         let isVideo = asset.mediaType == .video
-        // A video is sent as four frames from across it in one image.
+        // A video is sent as six frames from across it in one larger grid image.
         let picture = isVideo
-            ? await VideoFrames.sheet(for: asset, maxSide: 768, quality: 0.8, download: download)?.0
+            ? await VideoFrames.sheet(for: asset, maxSide: VideoFrames.sheetSide, quality: 0.82, download: download)?.0
             : await image(asset, maxSide: 768, quality: 0.8, download: download)
         guard let jpeg = picture else { return .failure(.skip) }
         let info = DeviceAsset(asset)

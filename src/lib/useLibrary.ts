@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import {
   applyClassifications,
+  fileConfidentReviews,
   markCategorySeen,
   mergeLookAlikeCategories,
   movePhotos,
@@ -136,6 +137,17 @@ export function useLibrary() {
         await store.putPhotos(requeue);
         const byId = new Map(requeue.map((p) => [p.id, p]));
         photos = photos.map((p) => byId.get(p.id) ?? p);
+      }
+      // Photos left in the review list under the older, stricter threshold are filed under
+      // the AI's guess when it is now confident enough.
+      const filed = fileConfidentReviews({ photos, categories }, newId);
+      if (filed) {
+        await Promise.all([
+          store.putPhotos(filed.putPhotos),
+          filed.putCategories.length ? store.putCategories(filed.putCategories) : null,
+          filed.deletedCategoryIds.length ? store.deleteCategories(filed.deletedCategoryIds) : null,
+        ]);
+        ({ photos, categories } = filed.state);
       }
       // Fold together categories that mean the same thing, from before this was enforced or
       // made by an older build ("Shoes" and "Sneakers", "Tee" and "Shirts").

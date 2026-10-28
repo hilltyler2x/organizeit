@@ -26,7 +26,7 @@ const PhotoInput = z.object({
   width: z.number().int().nonnegative().default(0),
   height: z.number().int().nonnegative().default(0),
   isScreenshot: z.boolean().default(false),
-  // A video arrives as one image holding four frames from across the clip.
+  // A video arrives as one image holding a grid of frames from across the clip.
   isVideo: z.boolean().default(false),
   durationSec: z.number().nonnegative().max(1_000_000).optional(),
 });
@@ -106,11 +106,13 @@ Then pick one category inside that section:
 - Never answer with a catch-all such as Other, Misc, Miscellaneous, Uncategorized, Unknown, General, Assorted, or Various, and never prefix a name with them. Even when unsure, name the most specific kind of thing you can see.
 - Product categories are by item type, not brand or color.
 
-Some items are videos. A video is shown as one image with four frames taken across the clip, in a 2x2 grid in time order (left to right, then top to bottom). Sort a video by what the clip as a whole shows, into the same sections and categories as photos: a video of a sneaker goes in Sneakers, a screen recording of a checkout goes in business. Don't make a category just because something is a video (never Videos, Clips or Screen Recordings).
+Some items are videos. A video is shown as one image: a grid of frames taken across the clip, in time order (left to right, then top to bottom), separated by black lines. Every frame is from the same video. Sort a video by what the clip is about, into the same sections and categories as photos: a video showing off a sneaker goes in Sneakers, a screen recording of a checkout or receipt goes in business, a clip of friends, a pet, a trip or a concert goes in personal. Don't make a category just because something is a video (never Videos, Clips or Screen Recordings).
+
+For videos, look across all the frames before deciding. Some frames are often blurry, dark or caught mid-movement; judge from the clearest ones and don't lower your confidence because of the rest. When different frames show different things, go with what most of the clip shows. A video with no product and no expense in it is personal, and you can be confident about that; name the kind of moment (for example Pets, Family, Concerts, Travel, Food).
 
 The label is a few words describing the specific thing shown.
 
-Confidence is between 0 and 1 and decides whether the person is asked to check your answer. Give below 0.6 when you can't really tell: the item is blurry, cut off or hidden, it could belong to two categories, or it isn't clear whether a screenshot is a business expense. Even then, give your best specific guess.
+Your answer is filed automatically: sorting the whole camera roll without the person's help is the point of the app, so commit to the best answer. When a photo could fit two categories, pick the more likely one; when it isn't clear whether a screenshot is a business expense, decide from what it shows; when nothing existing fits, make a new specific category. Confidence is between 0 and 1. Give 0.5 to 0.75 for such close calls, and higher when it's plain. Only give below 0.3 when you truly can't make out what the photo shows (black, blank, or blurred beyond recognition); just those few are handed to the person to check. Even then, give your best specific guess.
 
 You may be given corrections the person made to earlier sorts. They show how this person wants things filed and outrank your own judgement: when a photo looks like one of those items, use the category they chose, and avoid the mistake that was corrected.`;
 
@@ -142,7 +144,7 @@ function hints(req: PhotoInput): string {
   if (req.isScreenshot) parts.push("The phone marked this photo as a screenshot.");
   if (req.isVideo) {
     const length = req.durationSec ? ` (${Math.round(req.durationSec)} seconds long)` : "";
-    parts.push(`This is a video${length}. The image shows four frames from across it in a 2x2 grid.`);
+    parts.push(`This is a video${length}. The image shows frames from across it in a grid, in time order.`);
   }
   return parts.join("\n");
 }

@@ -3,7 +3,7 @@ import type { Photo } from "../core/types";
 import * as store from "./db";
 import { blobToBase64, decode, resize } from "./image";
 import { PhotoLibrary, base64ToBlob } from "./photoLibrary";
-import { frameSheet } from "./video";
+import { VIDEO_SHEET_SIDE, frameSheet } from "./video";
 
 // Image access for both kinds of photo. Photos from the phone's library are read in place
 // through the native plugin (only a small thumbnail is cached); photos added from files
@@ -45,16 +45,16 @@ export async function videoSource(photo: Photo): Promise<{ url: string; release:
 
 /**
  * A ~768px JPEG, base64-encoded, for the classifier. That is plenty to tell a receipt from a
- * sneaker, and about half the upload and AI reading time of 1024px. A video is sent as four
- * frames from across the clip in one 2×2 image.
+ * sneaker, and about half the upload and AI reading time of 1024px. A video is sent as six
+ * frames from across the clip in one larger grid image, so each frame is still sharp.
  */
 export async function classifierImage(photo: Photo): Promise<string> {
   if (photo.source.kind === "native") {
-    return (await PhotoLibrary.getImage({ id: photo.source.assetId, maxSide: CLASSIFIER_SIDE, quality: 0.8, frames: photo.isVideo })).data;
+    return (await PhotoLibrary.getImage({ id: photo.source.assetId, maxSide: photo.isVideo ? VIDEO_SHEET_SIDE : CLASSIFIER_SIDE, quality: photo.isVideo ? 0.82 : 0.8, frames: photo.isVideo })).data;
   }
   const original = (await store.getBlobs(photo.id))?.original;
   if (!original) throw new Error(photo.isVideo ? "Video data is missing." : "Photo data is missing.");
-  if (photo.isVideo) return blobToBase64(await frameSheet(original, CLASSIFIER_SIDE));
+  if (photo.isVideo) return blobToBase64(await frameSheet(original, VIDEO_SHEET_SIDE));
   const { bitmap } = await decode(original);
   const small = await resize(bitmap, CLASSIFIER_SIDE, 0.8);
   bitmap.close();

@@ -44,8 +44,13 @@ function finish(prev: LibraryState, photos: Photo[], categories: Category[], put
   };
 }
 
-/** Below this confidence the person is asked to pick the category instead of the AI. */
-export const REVIEW_BELOW = 0.6;
+/**
+ * Below this confidence the person is asked to pick the category instead of the AI. Kept low:
+ * the app is meant to sort nearly everything itself, so close calls are filed under the AI's
+ * best answer (after a second opinion from the stronger model) and only photos it can't make
+ * out at all are asked about. The background sorters on iOS and Android use the same number.
+ */
+export const REVIEW_BELOW = 0.3;
 
 /**
  * Files a classified photo, creating its category if needed. Throws on catch-all names. When
@@ -152,6 +157,19 @@ export function markCategorySeen(state: LibraryState, categoryId: string, now: n
   let updated: Category | undefined;
   const categories = state.categories.map((c) => (c.id === categoryId ? (updated = { ...c, seenAt: now }) : c));
   return { state: { ...state, categories }, putPhotos: [], putCategories: updated ? [updated] : [], deletedCategoryIds: [], deletedPhotoIds: [] };
+}
+
+/**
+ * Files photos left waiting under an older, stricter threshold whose guess is now confident
+ * enough, so the review list shrinks without sorting them again.
+ */
+export function fileConfidentReviews(state: LibraryState, newId: () => string): Change | null {
+  const results = state.photos.flatMap((p) =>
+    p.status === "review" && p.suggestion && (p.confidence ?? 0) >= REVIEW_BELOW
+      ? [{ photoId: p.id, result: { ...p.suggestion, label: p.label ?? p.suggestion.category, confidence: p.confidence! } }]
+      : [],
+  );
+  return results.length ? applyClassifications(state, results, newId) : null;
 }
 
 /** Photos waiting for the person: the AI wasn't sure, or sorting failed. */

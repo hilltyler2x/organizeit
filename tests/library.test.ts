@@ -89,7 +89,7 @@ describe("applyClassifications", () => {
       [
         { photoId: "a", result: { section: "products", category: "Sneakers", label: "Jordan 1", confidence: 0.95 } },
         { photoId: "b", result: { section: "products", category: "Sneakers", label: "Dunk Low", confidence: 0.9 } },
-        { photoId: "c", result: { section: "products", category: "Bags", label: "tote", confidence: 0.4 } },
+        { photoId: "c", result: { section: "products", category: "Bags", label: "tote", confidence: 0.2 } },
       ],
       newId,
     );

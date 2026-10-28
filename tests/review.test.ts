@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
 import { addLessons, lessonsForPrompt, lessonsFromMove, MAX_LESSONS } from "../src/core/lessons";
-import { applyClassification, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
+import { applyClassification, fileConfidentReviews, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
 import { usageByCategory } from "../src/core/storage";
 import type { Lesson, Photo } from "../src/core/types";
 
@@ -16,7 +16,7 @@ function start(...photos: Photo[]): LibraryState {
   return { photos, categories: seedCategories(newId) };
 }
 
-const unsure = { section: "products" as const, category: "Sneakers", label: "black slides", confidence: 0.4 };
+const unsure = { section: "products" as const, category: "Sneakers", label: "black slides", confidence: 0.2 };
 
 describe("photos the AI isn't sure about", () => {
   it("wait for the person instead of being filed, and no category is created for the guess", () => {
@@ -100,5 +100,25 @@ describe("learning from corrections", () => {
     expect(lessonsForPrompt(lessons, s.categories)).toEqual([{ label: "black slides", section: "products", category: "Slides", wrong: "Sneakers" }]);
     // If the category is gone, the name it had is still taught.
     expect(lessonsForPrompt(lessons, [])[0].category).toBe("Sandals");
+  });
+});
+
+describe("photos left for review under the old threshold", () => {
+  it("are filed under the AI's guess when it is confident enough, and the rest stay", () => {
+    const waiting = (id: string, confidence: number): Photo => ({
+      ...photo(id),
+      status: "review",
+      label: "black slides",
+      confidence,
+      suggestion: { section: "products", category: "Sandals" },
+    });
+    const c = fileConfidentReviews(start(waiting("a", 0.55), waiting("b", 0.1)), newId)!;
+    const sandals = c.state.categories.find((x) => x.name === "Sandals")!;
+    const [a, b] = c.state.photos;
+    expect(a.status).toBe("sorted");
+    expect(a.categoryId).toBe(sandals.id);
+    expect(b.status).toBe("review");
+    expect(needsPerson(c.state.photos).map((x) => x.id)).toEqual(["b"]);
+    expect(fileConfidentReviews(c.state, newId)).toBeNull();
   });
 });

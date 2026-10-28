@@ -7,7 +7,8 @@ android {
         applicationId "com.organizeit.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        // CI sets the build number (Google Play needs a higher one for every upload).
+        versionCode((System.getenv("ANDROID_VERSION_CODE") ?: "1") as int)
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -16,8 +17,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // The Google Play upload key. CI writes the keystore from repository secrets; without them the
+    // release build is left unsigned (the test APK uses the debug key either way).
+    signingConfigs {
+        release {
+            def keystore = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (keystore) {
+                storeFile file(keystore)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (System.getenv("ANDROID_KEYSTORE_PATH")) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

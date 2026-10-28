@@ -370,16 +370,18 @@ function BackgroundNote({ lib }: { lib: Library }) {
   if (!lib.native || !b) return null;
   const when = b.lastAt ? new Date(b.lastAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   return (
-    <p className="muted small">
-      {b.backgroundRefresh !== "on"
-        ? /android/i.test(navigator.userAgent)
-          ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
-          : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
-        : b.keepsGoingAfterClose
-          ? "You can close the app; sorting keeps going in the background (up to 100 photos on battery, the rest while charging)."
-          : "Sorting pauses about 30 seconds after you close the app (iOS 26 lets it keep going), and catches up when iOS gives it time."}
-      {b.last && ` Last: ${b.last}${when ? ` (${when})` : ""}`}
-    </p>
+    <div className="background-note muted small">
+      <p>
+        {b.backgroundRefresh !== "on"
+          ? /android/i.test(navigator.userAgent)
+            ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
+            : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
+          : b.keepsGoingAfterClose
+            ? "You can close the app; sorting keeps going in the background (up to 100 photos on battery, the rest while charging)."
+            : "Sorting pauses soon after you close the app, and catches up when the phone gives it time."}
+      </p>
+      {b.last && <p>Last: {b.last}{when ? ` (${when})` : ""}</p>}
+    </div>
   );
 }
 

@@ -3,7 +3,7 @@ import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
 import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
-import { API } from "../lib/api";
+import { API, hasPasscode } from "../lib/api";
 import { canRate, rateApp } from "../lib/appReview";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
@@ -274,6 +274,7 @@ function ConnectLibrary({ lib }: { lib: Library }) {
 function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
   const waiting = needsPerson(lib.photos);
+  const unsure = waiting.filter((p) => p.status === "review");
   const failed = waiting.filter((p) => p.status === "error");
   const connecting = lib.server === "checking" || lib.server === "offline";
   if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan && !lib.paywall) return null;
@@ -326,8 +327,16 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
       {waiting.length > 0 && (
         <div className="queue-failed">
           <p>
-            <strong>{waiting.length.toLocaleString()} photo{waiting.length === 1 ? "" : "s"} need{waiting.length === 1 ? "s" : ""} your help.</strong>{" "}
-            OrganizeIt wasn't sure where {waiting.length === 1 ? "it goes" : "they go"}. Your answers teach it for next time.
+            {unsure.length > 0 && (
+              <>
+                <strong>{unsure.length.toLocaleString()} photo{unsure.length === 1 ? "" : "s"} need{unsure.length === 1 ? "s" : ""} your help.</strong>{" "}
+                OrganizeIt wasn't sure where {unsure.length === 1 ? "it goes" : "they go"}. Your answers teach it for next time.
+              </>
+            )}
+            {unsure.length > 0 && failed.length > 0 && " "}
+            {failed.length > 0 && (
+              <strong>{failed.length.toLocaleString()} photo{failed.length === 1 ? "" : "s"} couldn't be sent to be sorted.</strong>
+            )}
           </p>
           <ul className="mini-grid">
             {waiting.slice(0, 12).map((p) => (
@@ -377,7 +386,9 @@ function BackgroundNote({ lib }: { lib: Library }) {
 /** How much of the free preview or the first month is used, while sorting. */
 function PlanNote({ lib }: { lib: Library }) {
   const p = lib.plan;
-  if (!lib.subscriptions || !p || lib.paywall) return null;
+  if (!lib.subscriptions || lib.paywall) return null;
+  if (hasPasscode()) return <span className="muted small"> Owner passcode: no limit.</span>;
+  if (!p) return null;
   if (!p.active && p.freeLimit > 0) {
     return <span className="muted small"> Free preview: {Math.min(p.freeUsed, p.freeLimit)} of {p.freeLimit} photos.</span>;
   }

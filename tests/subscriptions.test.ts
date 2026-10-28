@@ -76,6 +76,7 @@ describe("subscriptions", () => {
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "a", ...user("guesser-1") }, single)).status).toBe(402);
     for (let i = 0; i < 8; i++) await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": String(2000 + i) });
     const blocked = await call(app, "POST", "/api/unlock", { "x-organizeit-passcode": "1100" });
+    expect(blocked.body.reason).toBe("locked-out");
     expect(blocked.status).toBe(429);
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100" }, single)).status).toBe(429);
   });
@@ -90,6 +91,9 @@ describe("subscriptions", () => {
     expect((await unlock("1100", "ios-stranger")).status).toBe(401);
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-owner-phone") }, single)).status).toBe(200);
     expect((await call(app, "POST", "/api/classify", { "x-organizeit-passcode": "1100", ...user("ios-stranger") }, single)).status).toBe(402);
+    // The right passcode without the owner's phone isn't a guess, so it never locks anyone out.
+    for (let i = 0; i < 12; i++) expect((await unlock("1100")).status).toBe(401);
+    expect((await unlock("1100", "ios-owner-phone")).status).toBe(200);
     // A second passcode for a second phone.
     expect((await unlock("2200", "android-new-phone")).status).toBe(200);
     expect((await unlock("2200", "ios-owner-phone")).status).toBe(401);

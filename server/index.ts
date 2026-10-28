@@ -59,7 +59,11 @@ function passcodeChecker(passcodes: string[], owners?: PasscodeOwners) {
           return "unavailable";
         }
       }
-      console.log(`Right passcode from a phone that doesn't own it: ${phone || "(the website)"}`);
+      // Not counted as a wrong try: whoever sent it already knows the passcode, so it isn't
+      // guessing, and the owner's own phone sending it before its id is known mustn't lock
+      // the owner out.
+      console.log(`Right passcode from a phone that doesn't own it: ${phone || "(no phone id)"}`);
+      return "wrong";
     }
     if (!w) {
       if (wrong.size > 100_000) wrong.clear();
@@ -79,7 +83,7 @@ function requirePasscode(passcode: string | undefined, check: PasscodeCheck): Re
     const result = await check(req);
     if (result === "ok") return next();
     if (result === "blocked") {
-      res.status(429).json({ error: TOO_MANY_WRONG });
+      res.status(429).json({ error: TOO_MANY_WRONG, reason: "locked-out" });
       return;
     }
     if (result === "unavailable") {
@@ -113,7 +117,7 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
     const given = await check(req);
     if (given === "ok") return next();
     if (given === "blocked") {
-      res.status(429).json({ error: TOO_MANY_WRONG });
+      res.status(429).json({ error: TOO_MANY_WRONG, reason: "locked-out" });
       return;
     }
     if (given === "unavailable") {

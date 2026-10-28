@@ -241,6 +241,10 @@ main { padding: 24px max(24px, var(--safe-right)) calc(120px + var(--safe-bottom
   overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; box-shadow: var(--shadow);
 }
 .modal h2 { margin: 0 0 14px; }
+/* The question stays pinned at the top while the categories scroll under it. */
+.modal h2.modal-title {
+  position: sticky; top: -20px; z-index: 3; margin: -20px -20px 14px; padding: 20px 20px 10px; background: var(--surface);
+}
 .modal-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .segmented { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; }
 .segmented button { flex: 1; border: none; background: none; min-height: 34px; padding: 6px 8px; font-size: 0.88rem; }

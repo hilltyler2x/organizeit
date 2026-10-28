@@ -337,8 +337,9 @@ final class BackgroundSorter {
     private Answer classify(JSONObject asset, JSONObject config, JSONArray categories, JSONArray learned) {
         String image;
         try {
-            // A video is sent as four frames from across it in one image.
-            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), 768, true);
+            // A video is sent as six frames from across it in one larger grid image.
+            boolean video = MediaAssets.isVideo(asset.getString("id"));
+            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), video ? MediaAssets.SHEET_SIDE : 768, true);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
             bitmap.recycle();

@@ -14,8 +14,8 @@ interface PhotoLibraryPlugin {
   openSettings(): Promise<void>;
   list(options: { offset: number; limit: number }): Promise<{ assets: DeviceAsset[]; total: number; nextOffset: number | null }>;
   /**
-   * A JPEG of a photo, or of a video's opening frame. With `frames`, a video comes back as four
-   * frames from across the clip in a 2×2 grid instead, for sorting.
+   * A JPEG of a photo, or of a video's opening frame. With `frames`, a video comes back as six
+   * frames from across the clip in a grid instead, for sorting.
    */
   getImage(options: { id: string; maxSide: number; quality?: number; frames?: boolean }): Promise<{ data: string; width: number; height: number }>;
   /** Where a video can be played from: a file path (iOS) or content URI (Android). */

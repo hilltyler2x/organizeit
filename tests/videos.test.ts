@@ -87,7 +87,8 @@ describe("sorting a video on the server", () => {
     }
     const text = calls[0].messages[0].content.find((b: any) => b.type === "text").text;
     expect(text).toMatch(/This is a video \(14 seconds long\)/);
-    expect(calls[0].system).toMatch(/2x2 grid/);
+    expect(calls[0].system).toMatch(/grid of frames taken across the clip, in time order/);
+    expect(calls[0].system).toMatch(/don't lower your confidence/);
   });
 });
 
@@ -102,5 +103,34 @@ describe("duplicates", () => {
     expect(findDuplicates([item("photo"), item("video", { isVideo: true, durationMs: 5000 })])).toHaveLength(0);
     expect(findDuplicates([item("v1", { isVideo: true, durationMs: 5000 }), item("v2", { isVideo: true, durationMs: 20000 })])).toHaveLength(0);
     expect(findDuplicates([item("v1", { isVideo: true, durationMs: 5000 }), item("v2", { isVideo: true, durationMs: 5400 })])).toHaveLength(1);
+  });
+});
+
+describe("frame grid for sorting videos", () => {
+  it("takes six frames, skipping the very start and end", async () => {
+    const { FRAME_POINTS } = await import("../src/lib/video");
+    expect(FRAME_POINTS).toHaveLength(6);
+    expect(FRAME_POINTS[0]).toBeGreaterThan(0.05);
+    expect(FRAME_POINTS[5]).toBeLessThan(0.95);
+  });
+
+  it("lays tall videos three across and wide ones two across, near square and within the limit", async () => {
+    const { sheetLayout, VIDEO_SHEET_SIDE } = await import("../src/lib/video");
+    const tall = sheetLayout(1080, 1920, VIDEO_SHEET_SIDE);
+    expect([tall.cols, tall.rows]).toEqual([3, 2]);
+    const wide = sheetLayout(1920, 1080, VIDEO_SHEET_SIDE);
+    expect([wide.cols, wide.rows]).toEqual([2, 3]);
+    for (const l of [tall, wide, sheetLayout(1000, 1000, VIDEO_SHEET_SIDE)]) {
+      expect(Math.max(l.width, l.height)).toBeLessThanOrEqual(VIDEO_SHEET_SIDE);
+      expect(Math.min(l.width, l.height) / Math.max(l.width, l.height)).toBeGreaterThan(0.6);
+    }
+    // Each frame of a phone video gets far more detail than the old 2x2 grid at 768px (216x384).
+    expect(tall.cellW * tall.cellH).toBeGreaterThan(2 * 216 * 384);
+  });
+
+  it("spots black and faded frames", async () => {
+    const { spread, BLANK_SPREAD } = await import("../src/lib/video");
+    expect(spread(new Array(256).fill(3))).toBeLessThan(BLANK_SPREAD);
+    expect(spread(Array.from({ length: 256 }, (_, i) => (i * 37) % 256))).toBeGreaterThan(BLANK_SPREAD);
   });
 });

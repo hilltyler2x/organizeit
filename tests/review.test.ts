@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
 import { addLessons, lessonsForPrompt, lessonsFromMove, MAX_LESSONS } from "../src/core/lessons";
-import { applyClassification, fileConfidentReviews, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
+import { applyClassification, requeueForResort, SORT_VERSION, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
 import { usageByCategory } from "../src/core/storage";
 import type { Lesson, Photo } from "../src/core/types";
 
@@ -103,22 +103,23 @@ describe("learning from corrections", () => {
   });
 });
 
-describe("photos left for review under the old threshold", () => {
-  it("are filed under the AI's guess when it is confident enough, and the rest stay", () => {
-    const waiting = (id: string, confidence: number): Photo => ({
+describe("photos an older sorter left for the person", () => {
+  it("are queued to be sorted again once, and what the current sorter still can't place stays", () => {
+    const left = (id: string, status: "review" | "error", sortVersion?: number): Photo => ({
       ...photo(id),
-      status: "review",
+      status,
       label: "black slides",
-      confidence,
+      confidence: 0.4,
       suggestion: { section: "products", category: "Sandals" },
+      sortVersion,
     });
-    const c = fileConfidentReviews(start(waiting("a", 0.55), waiting("b", 0.1)), newId)!;
-    const sandals = c.state.categories.find((x) => x.name === "Sandals")!;
-    const [a, b] = c.state.photos;
-    expect(a.status).toBe("sorted");
-    expect(a.categoryId).toBe(sandals.id);
-    expect(b.status).toBe("review");
-    expect(needsPerson(c.state.photos).map((x) => x.id)).toEqual(["b"]);
-    expect(fileConfidentReviews(c.state, newId)).toBeNull();
+    const c = requeueForResort(start(left("a", "review"), left("b", "error"), left("c", "review", SORT_VERSION)))!;
+    expect(c.state.photos.map((p) => p.status)).toEqual(["queued", "queued", "review"]);
+    expect(c.putPhotos.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(needsPerson(c.state.photos).map((x) => x.id)).toEqual(["c"]);
+    // Sorted again and still unsure: it stays for the person and isn't queued a second time.
+    const again = applyClassification(c.state, "a", unsure, newId).state;
+    expect(again.photos.find((p) => p.id === "a")!.sortVersion).toBe(SORT_VERSION);
+    expect(requeueForResort({ ...again, photos: again.photos.filter((p) => p.id !== "b") })).toBeNull();
   });
 });

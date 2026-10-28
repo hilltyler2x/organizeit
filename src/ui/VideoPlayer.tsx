@@ -5,7 +5,7 @@ import { videoSource } from "../lib/media";
 import { useImageUrl } from "./Thumb";
 
 // The one video player, used everywhere a video is shown big enough to watch: the viewer,
-// the "Where does this go?" sheet in To review, the duplicates inspector and the press-and-hold menu.
+// the "Where does this go?" sheet in To review and the duplicates inspector.
 
 /** Plays a video; the poster frame shows while it loads, which can take a moment for a big one. */
 export function VideoPlayer({ photo }: { photo: Photo }) {

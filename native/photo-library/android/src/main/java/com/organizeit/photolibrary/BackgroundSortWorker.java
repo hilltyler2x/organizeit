@@ -110,13 +110,23 @@ public class BackgroundSortWorker extends Worker {
         } catch (Exception e) {
             // Not allowed right now (the app was already closed): carry on as ordinary work.
         }
+        boolean followed = false;
         while (!isStopped()) {
             if (BackgroundSorter.appVisible) {
                 // The app sorts by itself while it is open; follow along.
                 int waiting = sorter.queuedCount();
                 if (waiting == 0) return;
                 showProgress(waiting);
+                followed = true;
                 pause();
+                continue;
+            }
+            if (followed) {
+                // The app was just closed with photos still on their way to the server. Give
+                // those a moment to come back (the app then sends a shorter queue) so they aren't
+                // sent, and counted, twice.
+                followed = false;
+                for (int i = 0; i < 10 && !isStopped() && !BackgroundSorter.appVisible; i++) pause();
                 continue;
             }
             BackgroundSorter.Outcome outcome = sorter.run(() -> isStopped() || BackgroundSorter.appVisible, this::showProgress);

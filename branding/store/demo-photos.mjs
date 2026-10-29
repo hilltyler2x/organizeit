@@ -12,12 +12,18 @@ const COUNT = Number(process.argv[3] ?? 90);
 fs.mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch();
 
-async function jpeg(svgOrHtml, w, h, scale = 1) {
+async function jpeg(svgOrHtml, w, h, scale = 1, tries = 3) {
   const p = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: scale });
-  await p.setContent(svgOrHtml.startsWith("<svg") ? `<body style="margin:0">${svgOrHtml.replace("<svg ", `<svg width="${w}" height="${h}" `)}</body>` : svgOrHtml);
-  const buf = await p.screenshot({ type: "jpeg", quality: 85 });
-  await p.close();
-  return buf;
+  try {
+    await p.setContent(svgOrHtml.startsWith("<svg") ? `<body style="margin:0">${svgOrHtml.replace("<svg ", `<svg width="${w}" height="${h}" `)}</body>` : svgOrHtml);
+    return await p.screenshot({ type: "jpeg", quality: 85 });
+  } catch (err) {
+    // A fresh headless browser now and then can't capture its first page; try a new one.
+    if (tries <= 1) throw err;
+    return jpeg(svgOrHtml, w, h, scale, tries - 1);
+  } finally {
+    await p.close();
+  }
 }
 
 const product = (name) => (i) => jpeg(items[name](palettes[i % 8], backdrops[(i * 3 + 1) % 8]), 900, 900);

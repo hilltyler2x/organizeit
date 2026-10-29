@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * Gives OrganizeIt read, delete, album, copy and share access to the Android photo library
@@ -193,7 +194,8 @@ public class PhotoLibraryPlugin extends Plugin {
                 JSObject ret = new JSObject();
                 ret.put("assets", assets);
                 ret.put("total", total);
-                ret.put("nextOffset", end < total ? end : null);
+                // A plain null would drop the key, and the app would start over from the first page.
+                ret.put("nextOffset", end < total ? (Object) end : JSONObject.NULL);
                 call.resolve(ret);
             } catch (Exception e) {
                 call.reject("Could not read the photo library", e);

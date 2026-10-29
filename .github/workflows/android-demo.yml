@@ -1,0 +1,80 @@
+name: Android demo video
+
+# Records the background-sorting demo video Google Play asks for with the foreground service
+# (dataSync) declaration, on an emulator. Run it from Actions > Android demo video; the video is
+# in the run's android-demo-video artifact.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/android-demo.yml
+      - branding/store/record-android-demo.sh
+      - branding/store/demo-photos.mjs
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm run build:app
+      - name: Build test APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Make demo photos
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node branding/store/demo-photos.mjs "$RUNNER_TEMP/photos" 90
+      - name: Check the sorting server
+        run: |
+          API=https://organizeit-93mu.onrender.com
+          img=$(base64 -w0 "$RUNNER_TEMP/photos/IMG_5000.jpg")
+          printf '{"categories":[],"photos":[{"image":"%s","mediaType":"image/jpeg","fileName":"IMG_5000.jpg"}]}' "$img" > "$RUNNER_TEMP/probe.json"
+          curl -s -m 120 -H 'content-type: application/json' -H "x-organizeit-user: ci-probe-${{ github.run_id }}" --data @"$RUNNER_TEMP/probe.json" "$API/api/classify-batch"; echo
+          curl -s -H 'x-organizeit-user: android-b5ce649fd3d24049' "$API/api/subscription"; echo
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Record on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: bash branding/store/record-android-demo.sh android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/photos" "$RUNNER_TEMP/demo"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-demo-video
+          path: ${{ runner.temp }}/demo
+      # Also keep the recording on the android-demo branch, with a few still frames to check it by.
+      - name: Save to android-demo branch
+        run: |
+          cd "$RUNNER_TEMP/demo"
+          mkdir -p frames
+          ffmpeg -loglevel error -i organizeit-background-sorting-demo.mp4 -vf "fps=1/10,scale=360:-1" frames/f%02d.png || true
+          rm -f logcat.txt
+          curl -s https://organizeit-93mu.onrender.com/api/health > server-health.txt || true
+          git init -q -b android-demo
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit -qm "Demo video from run ${{ github.run_id }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" android-demo

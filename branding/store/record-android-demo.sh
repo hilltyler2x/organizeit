@@ -35,6 +35,8 @@ shade 5 2-open                         # notification while the app sorts
 adb shell input keyevent KEYCODE_HOME  # close the app
 sleep 4; calm; shot 3-home
 shade 20 4-closed                      # sorting carries on, count goes down
+adb shell dumpsys notification --noredact > "$OUT/notifications.txt" 2>&1 || true
+adb shell dumpsys activity services $PKG > "$OUT/services.txt" 2>&1 || true
 sleep 25
 shade 15 5-later
 sleep 20
@@ -43,3 +45,4 @@ sleep 25; shot 6-reopened
 wait $REC
 adb pull /sdcard/demo.mp4 "$OUT/organizeit-background-sorting-demo.mp4"
 adb logcat -d > "$OUT/logcat.txt" || true
+grep -iE "Capacitor|organizeit|WM-|BackgroundSort|chromium" "$OUT/logcat.txt" > "$OUT/app-log.txt" || true

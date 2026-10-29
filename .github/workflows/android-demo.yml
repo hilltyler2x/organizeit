@@ -49,6 +49,8 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          ram-size: 4096M
+          cores: 4
           disable-animations: false
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: bash branding/store/record-android-demo.sh android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/photos" "$RUNNER_TEMP/demo"
@@ -64,6 +66,7 @@ jobs:
           mkdir -p frames
           ffmpeg -loglevel error -i organizeit-background-sorting-demo.mp4 -vf "fps=1/10,scale=360:-1" frames/f%02d.png || true
           rm -f logcat.txt
+          curl -s https://organizeit-93mu.onrender.com/api/health > server-health.txt || true
           git init -q -b android-demo
           git add -A
           git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit -qm "Demo video from run ${{ github.run_id }}"

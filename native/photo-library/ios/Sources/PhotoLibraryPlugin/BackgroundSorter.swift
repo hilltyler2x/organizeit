@@ -13,10 +13,16 @@ import UniformTypeIdentifiers
 // - iOS 26 and later: once there are photos waiting, a continued processing task is started
 //   while the app is open, so sorting carries on after it is closed, with progress shown by
 //   the system. The person can stop it from there.
-// - Any iOS: about 30 more seconds when the app is closed (a background task), plus
-//   background refresh and processing tasks that iOS runs when it chooses (often overnight
-//   while charging) to sort photos taken since. Nothing can run the instant a photo is taken,
+// - Any iOS: in the half minute iOS gives a closed app, the waiting photos are handed to the
+//   background transfer service (BackgroundUploads.swift), which keeps sending them to be
+//   sorted while the app is suspended. Plus background refresh and processing tasks that iOS
+//   runs when it chooses (often overnight while charging) to sort photos taken since. Nothing can run the instant a photo is taken,
 //   and nothing runs after the app is swiped away in the app switcher until iOS relaunches it.
+//
+// Saving battery (BatteryPower): on battery, a background run sorts at most 100 photos, gives
+// up on an unreachable server after 3 minutes, and doesn't download photos kept in iCloud. In
+// Low Power Mode or under 20% (and not plugged in) it doesn't sort at all. A big backlog is
+// left for the processing task, which only runs while the phone charges.
 
 struct DeviceAsset: Codable {
     var id: String
@@ -27,11 +33,15 @@ struct DeviceAsset: Codable {
     var bytes: Int64
     var mimeType: String
     var isScreenshot: Bool
+    // Optional so answers saved before videos were sorted still load.
+    var isVideo: Bool?
+    var durationMs: Double?
 
     init(_ asset: PHAsset) {
+        let video = asset.mediaType == .video
         let resources = PHAssetResource.assetResources(for: asset)
-        let original = resources.first { $0.type == .photo } ?? resources.first
-        var mimeType = "image/jpeg"
+        let original = resources.first { $0.type == (video ? .video : .photo) } ?? resources.first
+        var mimeType = video ? "video/quicktime" : "image/jpeg"
         if let uti = original?.uniformTypeIdentifier, let type = UTType(uti), let mime = type.preferredMIMEType {
             mimeType = mime
         }
@@ -43,13 +53,22 @@ struct DeviceAsset: Codable {
         bytes = (original?.value(forKey: "fileSize") as? NSNumber)?.int64Value ?? 0
         self.mimeType = mimeType
         isScreenshot = asset.mediaSubtypes.contains(.photoScreenshot)
+        if video {
+            isVideo = true
+            durationMs = (asset.duration * 1000).rounded()
+        }
     }
 
     var dictionary: [String: Any] {
-        [
+        var out: [String: Any] = [
             "id": id, "fileName": fileName, "width": width, "height": height, "createdAt": createdAt,
             "bytes": bytes, "mimeType": mimeType, "isScreenshot": isScreenshot
         ]
+        if isVideo == true {
+            out["isVideo"] = true
+            out["durationMs"] = durationMs ?? 0
+        }
+        return out
     }
 }
 
@@ -76,6 +95,8 @@ struct Classification: Codable {
 struct BackgroundSortConfig: Codable {
     var apiUrl: String
     var passcode: String
+    /// RevenueCat id the server checks the subscription of. Missing in snapshots saved by older builds.
+    var userId: String?
     var categories: [CategoryName]
     var lessons: [LessonForPrompt]
     /// Photos waiting to be sorted, newest first.
@@ -170,6 +191,35 @@ struct BackgroundSortLog {
     }
 }
 
+/// What the battery allows background sorting to do right now.
+struct BatteryPower {
+    var charging: Bool
+    /// 0...1, or -1 when iOS doesn't say.
+    var level: Float
+    var lowPowerMode: Bool
+
+    /// Most photos a background run sorts on battery; the rest wait for the phone to charge.
+    static let batteryLimit = 100
+
+    /// Low Power Mode, or under 20%, and not plugged in: background sorting waits.
+    var shouldPause: Bool { !charging && (lowPowerMode || (level >= 0 && level < 0.2)) }
+
+    /// Call on the main thread, like the rest of UIDevice.
+    static func read() -> BatteryPower {
+        let device = UIDevice.current
+        device.isBatteryMonitoringEnabled = true
+        return BatteryPower(
+            charging: device.batteryState == .charging || device.batteryState == .full,
+            level: device.batteryLevel,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled
+        )
+    }
+
+    static func now() async -> BatteryPower {
+        await MainActor.run { read() }
+    }
+}
+
 public final class BackgroundSorter {
     public static let shared = BackgroundSorter()
 
@@ -187,6 +237,8 @@ public final class BackgroundSorter {
     private var continuedTotal: Int64 = 0
     /// When starting the continued task last failed; not retried for a minute after.
     private var continuedFailedAt: Date?
+    /// The battery as last read, for code that can't wait on the main thread.
+    private var power = BatteryPower(charging: false, level: -1, lowPowerMode: false)
     /// How many photos the last run sorted, for the log.
     private var lastRunSorted = 0
 
@@ -213,6 +265,8 @@ public final class BackgroundSorter {
     /// to be registered before launch finishes.
     public func registerTasks() {
         setAppActive(UIApplication.shared.applicationState != .background)
+        notePower(BatteryPower.read())
+        BackgroundUploads.shared.reconnect()
         BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshId, using: nil) { [weak self] task in
             self?.runScheduled(task)
         }
@@ -224,6 +278,12 @@ public final class BackgroundSorter {
         let center = NotificationCenter.default
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.setAppActive(true)
+            BackgroundUploads.shared.cancelAll()
+        }
+        for name in [UIDevice.batteryStateDidChangeNotification, UIDevice.batteryLevelDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.notePower(BatteryPower.read())
+            }
         }
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self = self else { return }
@@ -233,16 +293,35 @@ public final class BackgroundSorter {
         }
     }
 
-    /// Asks iOS to wake the app now and then to sort photos taken since it was last open.
+    /// Call from application(_:handleEventsForBackgroundURLSession:completionHandler:).
+    /// Returns false for a session that isn't OrganizeIt's sorting.
+    public func handleEvents(forBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) -> Bool {
+        BackgroundUploads.shared.handleEvents(identifier, completion: completionHandler)
+    }
+
+    private func notePower(_ value: BatteryPower) {
+        lock.lock()
+        power = value
+        lock.unlock()
+    }
+
+    private var lastPower: BatteryPower {
+        lock.lock()
+        defer { lock.unlock() }
+        return power
+    }
+
+    /// Asks iOS to wake the app now and then to sort photos taken since it was last open: a
+    /// short refresh about hourly for new photos, and the long catch-up only while charging.
     func scheduleBackgroundTasks() {
         guard store.load().config != nil else { return }
         let refresh = BGAppRefreshTaskRequest(identifier: refreshId)
-        refresh.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        refresh.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60)
         try? BGTaskScheduler.shared.submit(refresh)
         let processing = BGProcessingTaskRequest(identifier: processingId)
         processing.requiresNetworkConnectivity = true
-        processing.requiresExternalPower = false
-        processing.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+        processing.requiresExternalPower = true
+        processing.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(processing)
     }
 
@@ -260,6 +339,8 @@ public final class BackgroundSorter {
                 return
             }
             guard waiting > 0, !alreadyStarted, isAppActive else { return }
+            // Low Power Mode or a low battery: leave it for when the phone charges.
+            if lastPower.shouldPause { return }
             if let failed = continuedFailedAt, Date().timeIntervalSince(failed) < 60 { return }
             // Info.plist permits "<bundle id>.continue.*"; each request gets a fresh identifier with
             // its own handler, since a handler can't be registered for the wildcard and an
@@ -301,11 +382,8 @@ public final class BackgroundSorter {
         case .denied: out["backgroundRefresh"] = "off"
         default: out["backgroundRefresh"] = "restricted"
         }
-        var continued = false
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) { continued = true }
-        #endif
-        out["keepsGoingAfterClose"] = continued
+        // Any iOS: photos handed to the background transfer service keep being sorted.
+        out["keepsGoingAfterClose"] = true
         if let last = BackgroundSortLog.last {
             out["last"] = last.message
             out["lastAt"] = last.at
@@ -325,6 +403,8 @@ public final class BackgroundSorter {
         case blocked
         /// Another run is already sorting.
         case busy
+        /// Stopped to save battery; carries on once the phone charges.
+        case paused
     }
 
     private func claim() -> Bool {
@@ -356,13 +436,28 @@ public final class BackgroundSorter {
         }
         guard let first = store.load().config, !first.apiUrl.isEmpty else { return .blocked }
         var categories = first.categories
-        var skip = Set<String>()
+        // Photos already handed to iOS to send are answered there.
+        var skip = await BackgroundUploads.shared.inFlight()
         var tries: [String: Int] = [:]
         var pause: UInt64 = 0
         var waitedSince: Date?
         var sorted = 0
         defer { lastRunSorted = sorted }
         while !shouldStop() {
+            let power = await BatteryPower.now()
+            notePower(power)
+            if power.shouldPause {
+                lastRunSorted = sorted
+                noteRun(power.lowPowerMode
+                    ? "Paused to save battery (Low Power Mode). Sorting carries on when the phone charges or you open OrganizeIt."
+                    : "Paused to save battery (under 20%). Sorting carries on when the phone charges or you open OrganizeIt.")
+                return .paused
+            }
+            if !power.charging && sorted >= BatteryPower.batteryLimit {
+                lastRunSorted = sorted
+                noteRun("The rest will be sorted while the phone charges, or when you open OrganizeIt.")
+                return .paused
+            }
             // Re-read each round: the app may have sent a newer snapshot.
             let (stored, results) = store.load()
             guard let config = stored else { return .blocked }
@@ -375,7 +470,7 @@ public final class BackgroundSorter {
             await withTaskGroup(of: (PHAsset, Result<Classification, SortError>).self) { group in
                 for asset in batch {
                     let cats = categories
-                    group.addTask { (asset, await self.classify(asset, config: config, categories: cats)) }
+                    group.addTask { (asset, await self.classify(asset, config: config, categories: cats, download: power.charging)) }
                 }
                 for await (asset, outcome) in group {
                     let id = asset.localIdentifier
@@ -386,7 +481,7 @@ public final class BackgroundSorter {
                         sorted += 1
                         // Same threshold as REVIEW_BELOW in src/core/library.ts.
                         let named = CategoryName(section: result.section, name: result.category)
-                        if result.confidence >= 0.6 && !categories.contains(named) { categories.append(named) }
+                        if result.confidence >= 0.3 && !categories.contains(named) { categories.append(named) }
                         left = max(0, left - 1)
                         progress?(left)
                     case .failure(.skip):
@@ -405,17 +500,19 @@ public final class BackgroundSorter {
             switch problem {
             case .permanent?:
                 lastRunSorted = sorted
-                noteRun("Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.")
+                noteRun("Stopped: the server turned the photos down (subscription, passcode or AI key). Open OrganizeIt to see why.")
                 return .blocked
             case .offline?, .retry?:
                 // Give the server (which can take a minute to wake) or the network time to come back.
+                // On battery, a few minutes of waiting with the radio on is all it's worth.
                 let since = waitedSince ?? Date()
                 waitedSince = since
-                if Date().timeIntervalSince(since) > 15 * 60 {
+                let minutes = power.charging ? 15 : 3
+                if Date().timeIntervalSince(since) > Double(minutes * 60) {
                     lastRunSorted = sorted
                     noteRun(problem == .offline
-                        ? "Stopped: couldn't reach the sorting server for 15 minutes."
-                        : "Stopped: the sorting server stayed busy for 15 minutes.")
+                        ? "Stopped: couldn't reach the sorting server for \(minutes) minutes."
+                        : "Stopped: the sorting server stayed busy for \(minutes) minutes.")
                     return .blocked
                 }
                 pause = min(max(pause * 2, 5), 60)
@@ -431,16 +528,15 @@ public final class BackgroundSorter {
     }
 
     /// The next photos to sort: ones the app queued, then ones taken since it was last open.
-    private func nextBatch(_ config: BackgroundSortConfig, skipping skip: inout Set<String>, size: Int) -> ([PHAsset], Int) {
+    func nextBatch(_ config: BackgroundSortConfig, skipping skip: inout Set<String>, size: Int) -> ([PHAsset], Int) {
         let queued = config.queued.filter { [skip] in !skip.contains($0) }
         let queuedSet = Set(config.queued)
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate)
+        let options = VideoFrames.mediaOptions(NSPredicate(format: "creationDate > %@", Date(timeIntervalSince1970: config.knownUpTo / 1000) as NSDate))
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.fetchLimit = 500
         var fresh: [PHAsset] = []
         let skipped = skip
-        PHAsset.fetchAssets(with: .image, options: options).enumerateObjects { asset, _, _ in
+        PHAsset.fetchAssets(with: options).enumerateObjects { asset, _, _ in
             if !skipped.contains(asset.localIdentifier) && !queuedSet.contains(asset.localIdentifier) { fresh.append(asset) }
         }
         var batch: [PHAsset] = []
@@ -459,7 +555,7 @@ public final class BackgroundSorter {
     }
 
     enum SortError: Error {
-        /// Wrong passcode or no AI key: retrying won't help.
+        /// Wrong passcode, no subscription or no AI key: retrying won't help.
         case permanent
         /// No connection, or the server is asleep or unreachable.
         case offline
@@ -469,10 +565,42 @@ public final class BackgroundSorter {
         case skip
     }
 
-    private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName]) async -> Result<Classification, SortError> {
-        guard let jpeg = await image(asset, maxSide: 768, quality: 0.8) else { return .failure(.skip) }
+    /// `download`: whether a photo kept only in iCloud may be downloaded (only while charging).
+    private func classify(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName], download: Bool) async -> Result<Classification, SortError> {
+        let request: URLRequest
+        switch await classifyRequest(asset, config: config, categories: categories, download: download) {
+        case .success(let r): request = r
+        case .failure(let e): return .failure(e)
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return Self.answer((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+        } catch {
+            return .failure(.offline) // no connection, server asleep, or cancelled
+        }
+    }
+
+    /// What the server's reply to /api/classify means.
+    static func answer(_ code: Int, _ data: Data) -> Result<Classification, SortError> {
+        if code == 200, let result = try? JSONDecoder().decode(Classification.self, from: data) { return .success(result) }
+        switch code {
+        // Wrong passcode, no subscription (or this month's photos used up), or no working AI key.
+        case 401, 402, 503: return .failure(.permanent)
+        case 429, 500...599: return .failure(.retry)
+        default: return .failure(.skip)
+        }
+    }
+
+    /// The /api/classify request for one photo or video, with its body.
+    func classifyRequest(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName], download: Bool) async -> Result<URLRequest, SortError> {
+        let isVideo = asset.mediaType == .video
+        // A video is sent as six frames from across it in one larger grid image.
+        let picture = isVideo
+            ? await VideoFrames.sheet(for: asset, maxSide: VideoFrames.sheetSide, quality: 0.82, download: download)?.0
+            : await image(asset, maxSide: 768, quality: 0.8, download: download)
+        guard let jpeg = picture else { return .failure(.skip) }
         let info = DeviceAsset(asset)
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "image": jpeg.base64EncodedString(),
             "mediaType": "image/jpeg",
             "fileName": String(info.fileName.prefix(300)),
@@ -486,28 +614,22 @@ public final class BackgroundSorter {
                 return l
             }
         ]
+        if isVideo {
+            body["isVideo"] = true
+            body["durationSec"] = Int(asset.duration.rounded())
+        }
         guard let url = URL(string: config.apiUrl + "/api/classify"),
               let payload = try? JSONSerialization.data(withJSONObject: body) else { return .failure(.permanent) }
         var request = URLRequest(url: url, timeoutInterval: 90) // the free server can take a minute to wake
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(config.passcode, forHTTPHeaderField: "x-organizeit-passcode")
+        if let userId = config.userId, !userId.isEmpty { request.setValue(userId, forHTTPHeaderField: "x-organizeit-user") }
         request.httpBody = payload
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if code == 200, let result = try? JSONDecoder().decode(Classification.self, from: data) { return .success(result) }
-            switch code {
-            case 401, 503: return .failure(.permanent) // wrong passcode, or the server has no working AI key
-            case 429, 500...599: return .failure(.retry)
-            default: return .failure(.skip)
-            }
-        } catch {
-            return .failure(.offline) // no connection, server asleep, or cancelled
-        }
+        return .success(request)
     }
 
-    private func image(_ asset: PHAsset, maxSide: CGFloat, quality: CGFloat) async -> Data? {
+    private func image(_ asset: PHAsset, maxSide: CGFloat, quality: CGFloat, download: Bool) async -> Data? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let scale = min(1, maxSide / CGFloat(max(asset.pixelWidth, asset.pixelHeight, 1)))
@@ -516,7 +638,7 @@ public final class BackgroundSorter {
                 options.isSynchronous = true
                 options.deliveryMode = .highQualityFormat
                 options.resizeMode = .exact
-                options.isNetworkAccessAllowed = true
+                options.isNetworkAccessAllowed = download
                 var data: Data?
                 PHImageManager.default().requestImage(for: asset, targetSize: target, contentMode: .aspectFit, options: options) { image, _ in
                     data = image?.jpegData(compressionQuality: quality)
@@ -536,20 +658,22 @@ public final class BackgroundSorter {
             switch outcome {
             case .finished: self.noteRun("All caught up.")
             case .stopped: self.noteRun("iOS ended this background run; it picks when the next one is.")
-            default: break
+            default: break // .paused and .blocked log their own reason
             }
             task.setTaskCompleted(success: outcome != .blocked)
         }
         task.expirationHandler = { work.cancel() }
     }
 
-    /// The extra half minute or so iOS gives an app that was just closed. Skipped when the
-    /// continued task (iOS 26+) is already carrying on.
+    /// The half minute or so iOS gives an app that was just closed: spent handing the waiting
+    /// photos to iOS's background transfer service (BackgroundUploads), which keeps sending
+    /// them to be sorted after the app is suspended. Skipped when the continued task (iOS 26+)
+    /// is already carrying on.
     private func keepGoingAfterClose() {
         lock.lock()
         let continuing = continuedTask != nil
         lock.unlock()
-        guard !continuing, let config = store.load().config, !config.queued.isEmpty else { return }
+        guard !continuing, store.load().config != nil else { return }
         final class Holder { var id = UIBackgroundTaskIdentifier.invalid }
         let holder = Holder()
         let finish = {
@@ -560,14 +684,22 @@ public final class BackgroundSorter {
             }
         }
         let work = Task {
-            let outcome = await self.run(shouldStop: { Task.isCancelled || self.isAppActive })
-            if outcome == .finished { self.noteRun("All caught up.") }
-            if outcome == .stopped && !self.isAppActive {
-                self.noteRun("iOS paused sorting about 30 seconds after the app was closed.")
+            let power = await BatteryPower.now()
+            if power.shouldPause {
+                self.lastRunSorted = 0
+                self.noteRun(power.lowPowerMode
+                    ? "Paused to save battery (Low Power Mode). Sorting carries on when the phone charges or you open OrganizeIt."
+                    : "Paused to save battery (under 20%). Sorting carries on when the phone charges or you open OrganizeIt.")
+                return finish()
+            }
+            let limit = power.charging ? BackgroundUploads.chargingRound : BatteryPower.batteryLimit
+            let handed = await BackgroundUploads.shared.handOff(limit: limit, shouldStop: { Task.isCancelled || self.isAppActive })
+            if handed > 0 {
+                BackgroundSortLog.note("Sorting \(handed) photo\(handed == 1 ? "" : "s") in the background since you closed the app\(power.charging ? "" : " (the rest wait for the charger)").")
             }
             finish()
         }
-        holder.id = UIApplication.shared.beginBackgroundTask(withName: "Sort photos") {
+        holder.id = UIApplication.shared.beginBackgroundTask(withName: "Hand photos to iOS") {
             work.cancel()
             finish()
         }
@@ -613,6 +745,8 @@ public final class BackgroundSorter {
                 }
                 if outcome == .finished {
                     if self.isAppActive { continue }
+                    // Watching for new photos keeps the phone awake: only worth it while charging.
+                    if !self.lastPower.charging { self.noteRun("All caught up."); break }
                     let until = watchUntil ?? Date(timeIntervalSinceNow: 5 * 60)
                     watchUntil = until
                     if Date() >= until { self.noteRun("All caught up."); break }
@@ -622,6 +756,7 @@ public final class BackgroundSorter {
                     continue
                 }
                 if outcome == .blocked { success = false; break }
+                if outcome == .paused { break }
                 if outcome == .busy { try? await Task.sleep(nanoseconds: 2_000_000_000) }
             }
             self.lock.lock()

@@ -18,6 +18,11 @@ export interface Category {
   createdAt: number;
   /** When the person last opened this category. Photos the AI files after this are "new". */
   seenAt?: number;
+  /**
+   * Names the person renamed this category away from (or merged into it by renaming). When the
+   * AI answers with one of them, the photo is filed here instead of in a new category.
+   */
+  aliases?: string[];
 }
 
 /**
@@ -49,6 +54,30 @@ export interface Photo {
   error?: string;
   /** The device marked this as a screenshot, a strong hint for business expenses. */
   isScreenshot?: boolean;
+  /**
+   * A video rather than a still photo. Videos are sorted from a few frames taken across the
+   * clip, into the same categories as photos, and count toward the same storage totals.
+   */
+  isVideo?: boolean;
+  /** Length of a video in milliseconds. */
+  durationMs?: number;
+  /**
+   * Which version of the sorter last looked at this photo (SORT_VERSION in core/library.ts).
+   * Photos left for the person by an older sorter are sorted again once by the newer one.
+   */
+  sortVersion?: number;
+  /**
+   * Fingerprint of what the photo looks like (16 hex digits), used to spot duplicates. Not set
+   * until worked out; an empty string means the image couldn't be read.
+   */
+  hash?: string;
+  /**
+   * Results of comparing this photo at full detail with look-alikes (by their id): true for a
+   * copy, false for a different picture. Kept on the photo with the smaller id of each pair.
+   */
+  closeLooks?: Record<string, boolean>;
+  /** The person said this photo is not a copy of the ones it looks like. */
+  notDuplicate?: boolean;
   /** Where the photo came from, so a native build can act on the original asset. */
   source: { kind: "file" } | { kind: "native"; assetId: string };
 }

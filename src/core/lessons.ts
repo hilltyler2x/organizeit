@@ -60,17 +60,39 @@ export interface LessonForPrompt {
 }
 
 /**
- * The newest lessons, with category ids turned into current names (so renames carry over).
- * If a lesson's category has since been removed, the name it had is used.
+ * Lessons to send with a sort, with category ids turned into current names (so renames carry
+ * over). If a lesson's category has since been removed, the name it had is used. Taken a few
+ * from every category the person has filed into, newest first, rather than just the newest
+ * overall: one big move into a single category shouldn't push out what they taught about the
+ * others.
  */
 export function lessonsForPrompt(lessons: Lesson[], categories: Category[], limit = LESSONS_PER_REQUEST): LessonForPrompt[] {
   const byId = new Map(categories.map((c) => [c.id, c]));
-  const out: LessonForPrompt[] = [];
+  const groups = new Map<string, LessonForPrompt[]>();
   for (const l of [...lessons].sort((a, b) => b.createdAt - a.createdAt)) {
     const c = byId.get(l.categoryId) ?? { section: l.section, name: l.category };
     const wrong = l.wrongCategory && categoryMatchKey(l.wrongCategory) !== categoryMatchKey(c.name) ? l.wrongCategory : undefined;
-    out.push({ label: l.label.slice(0, 120), section: c.section, category: c.name, ...(wrong ? { wrong: wrong.slice(0, 80) } : {}) });
-    if (out.length >= limit) break;
+    const key = `${c.section}:${categoryMatchKey(c.name)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push({ label: l.label.slice(0, 120), section: c.section, category: c.name, ...(wrong ? { wrong: wrong.slice(0, 80) } : {}) });
+  }
+  // Round by round: the newest of each category (most recently used category first), then the
+  // next newest of each, and so on.
+  const out: LessonForPrompt[] = [];
+  const lists = [...groups.values()];
+  for (let round = 0; out.length < limit && lists.some((g) => g.length > round); round++) {
+    for (const g of lists) {
+      if (round < g.length && out.length < limit) out.push(g[round]);
+    }
   }
   return out;
+}
+
+/** Points lessons at the category their own one was merged into. Returns only the changed ones. */
+export function relinkLessons(lessons: Lesson[], merged: Map<string, string>, categories: Category[]): Lesson[] {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  return lessons.flatMap((l) => {
+    const to = byId.get(merged.get(l.categoryId) ?? "");
+    return to ? [{ ...l, categoryId: to.id, section: to.section, category: to.name }] : [];
+  });
 }

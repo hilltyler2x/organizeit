@@ -27,7 +27,9 @@ import java.util.concurrent.TimeUnit;
  * - "keep going": started while the app is open with photos waiting, as a foreground service
  *   with a "Sorting photos" notification, so sorting carries on after the app is closed;
  * - "new photo": runs a few seconds after a photo is added to the library;
- * - "periodic": about once an hour, as a fallback.
+ * - "periodic": about once an hour while charging, as a fallback.
+ * On battery each run sorts at most Power.BATTERY_LIMIT photos, and none in Battery Saver or
+ * under 20%; the rest waits for the phone to charge.
  */
 public class BackgroundSortWorker extends Worker {
 
@@ -50,14 +52,17 @@ public class BackgroundSortWorker extends Worker {
         return new OneTimeWorkRequest.Builder(BackgroundSortWorker.class).setInputData(new Data.Builder().putString(KIND, kind).build());
     }
 
-    /** Sorts new photos while the app is closed: soon after one is added, and hourly. */
+    /**
+     * Sorts new photos while the app is closed: soon after one is added (unless the battery is
+     * low), and an hourly catch-up that only runs while charging.
+     */
     static void schedule(Context context) {
         WorkManager wm = WorkManager.getInstance(context);
         wm.enqueueUniquePeriodicWork(
             "organizeit-periodic",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             new PeriodicWorkRequest.Builder(BackgroundSortWorker.class, 1, TimeUnit.HOURS)
-                .setConstraints(online().build())
+                .setConstraints(online().setRequiresCharging(true).build())
                 .setInputData(new Data.Builder().putString(KIND, PERIODIC).build())
                 .build()
         );
@@ -66,7 +71,9 @@ public class BackgroundSortWorker extends Worker {
 
     private static void watchForNewPhotos(Context context, ExistingWorkPolicy policy) {
         Constraints constraints = online()
+            .setRequiresBatteryNotLow(true)
             .addContentUriTrigger(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
+            .addContentUriTrigger(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true)
             .setTriggerContentUpdateDelay(3, TimeUnit.SECONDS)
             .setTriggerContentMaxDelay(15, TimeUnit.SECONDS)
             .build();
@@ -78,7 +85,7 @@ public class BackgroundSortWorker extends Worker {
         WorkManager.getInstance(context).enqueueUniqueWork(
             "organizeit-keep-going",
             ExistingWorkPolicy.KEEP,
-            once(KEEP_GOING).setConstraints(online().build()).build()
+            once(KEEP_GOING).setConstraints(online().setRequiresBatteryNotLow(true).build()).build()
         );
     }
 
@@ -113,7 +120,7 @@ public class BackgroundSortWorker extends Worker {
                 continue;
             }
             BackgroundSorter.Outcome outcome = sorter.run(() -> isStopped() || BackgroundSorter.appVisible, this::showProgress);
-            if (outcome == BackgroundSorter.Outcome.FINISHED || outcome == BackgroundSorter.Outcome.BLOCKED) return;
+            if (outcome != BackgroundSorter.Outcome.STOPPED && outcome != BackgroundSorter.Outcome.BUSY) return;
             if (outcome == BackgroundSorter.Outcome.BUSY) pause();
         }
     }

@@ -1,8 +1,9 @@
 import { emptyCreatedCategories } from "./storage";
-import { isBannedCategoryName, resolveCategory } from "./categories";
+import { findMatchingCategory, isBannedCategoryName, resolveCategory } from "./categories";
+import { withAlias } from "./habits";
 import type { Category, Classification, Photo, Section } from "./types";
 
-/** One photo as the device's photo library reports it. */
+/** One photo or video as the device's photo library reports it. */
 export interface DeviceAsset {
   id: string;
   fileName: string;
@@ -12,6 +13,8 @@ export interface DeviceAsset {
   bytes: number;
   mimeType: string;
   isScreenshot: boolean;
+  isVideo?: boolean;
+  durationMs?: number;
 }
 
 // Pure state transitions for the photo library. The UI layer persists the results.
@@ -42,8 +45,19 @@ function finish(prev: LibraryState, photos: Photo[], categories: Category[], put
   };
 }
 
-/** Below this confidence the person is asked to pick the category instead of the AI. */
-export const REVIEW_BELOW = 0.6;
+/**
+ * Below this confidence the person is asked to pick the category instead of the AI. Kept low:
+ * the app is meant to sort nearly everything itself, so close calls are filed under the AI's
+ * best answer (after a second opinion from the stronger model) and only photos it can't make
+ * out at all are asked about. The background sorters on iOS and Android use the same number.
+ */
+export const REVIEW_BELOW = 0.3;
+
+/**
+ * Bumped when sorting gets meaningfully better (prompt, threshold, video frames), so photos an
+ * older sorter left for the person are tried again. 2: low review threshold and six-frame videos.
+ */
+export const SORT_VERSION = 2;
 
 /**
  * Files a classified photo, creating its category if needed. Throws on catch-all names. When
@@ -56,7 +70,7 @@ export function applyClassification(state: LibraryState, photoId: string, result
     let updated: Photo | undefined;
     const photos = state.photos.map((p) => {
       if (p.id !== photoId) return p;
-      updated = { ...p, status: "review", categoryId: undefined, label: result.label, confidence: result.confidence, suggestion, error: undefined };
+      updated = { ...p, status: "review", sortVersion: SORT_VERSION, categoryId: undefined, label: result.label, confidence: result.confidence, suggestion, error: undefined };
       return updated;
     });
     return finish(state, photos, state.categories, updated ? [updated] : [], []);
@@ -66,7 +80,7 @@ export function applyClassification(state: LibraryState, photoId: string, result
   let updated: Photo | undefined;
   const photos = state.photos.map((p) => {
     if (p.id !== photoId) return p;
-    updated = { ...p, status: "sorted", categoryId: category.id, filedAt: now, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
+    updated = { ...p, status: "sorted", sortVersion: SORT_VERSION, categoryId: category.id, filedAt: now, label: result.label, confidence: result.confidence, suggestion: undefined, error: undefined };
     return updated;
   });
   return finish(state, photos, categories, updated ? [updated] : [], created ? [category] : []);
@@ -85,7 +99,7 @@ export function applyClassifications(state: LibraryState, results: { photoId: st
     } catch (err) {
       // A catch-all answer is never filed; the photo is left for the person instead.
       const error = err instanceof Error ? err.message : String(err);
-      next = { ...next, photos: next.photos.map((p) => (p.id === photoId ? { ...p, status: "error", error } : p)) };
+      next = { ...next, photos: next.photos.map((p) => (p.id === photoId ? { ...p, status: "error", sortVersion: SORT_VERSION, error } : p)) };
     }
     changed.add(photoId);
   }
@@ -152,6 +166,24 @@ export function markCategorySeen(state: LibraryState, categoryId: string, now: n
   return { state: { ...state, categories }, putPhotos: [], putCategories: updated ? [updated] : [], deletedCategoryIds: [], deletedPhotoIds: [] };
 }
 
+/**
+ * Photos left for the person (unsure or failed) by an older version of the sorter are queued
+ * to be sorted again by the current one, so a pile built up under stricter rules or a weaker
+ * video reader drains by itself instead of being sorted by hand. Each photo gets this once
+ * per sorter version: what the current sorter still can't place stays for the person.
+ */
+export function requeueForResort(state: LibraryState): Change | null {
+  const putPhotos: Photo[] = [];
+  const photos = state.photos.map((p) => {
+    if ((p.status !== "review" && p.status !== "error") || (p.sortVersion ?? 0) >= SORT_VERSION) return p;
+    const next: Photo = { ...p, status: "queued", error: undefined };
+    putPhotos.push(next);
+    return next;
+  });
+  if (!putPhotos.length) return null;
+  return { state: { ...state, photos }, putPhotos, putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [] };
+}
+
 /** Photos waiting for the person: the AI wasn't sure, or sorting failed. */
 export function needsPerson(photos: Photo[]): Photo[] {
   return photos.filter((p) => p.status === "review" || p.status === "error").sort((a, b) => b.takenAt - a.takenAt);
@@ -169,14 +201,18 @@ export function renameCategory(state: LibraryState, categoryId: string, name: st
   if (!current) throw new Error("That category no longer exists.");
   const others = state.categories.filter((c) => c.id !== categoryId);
   const { category, created } = resolveCategory(others, current.section, name, newId);
+  // The old name is kept as an alias, so the AI calling things by it still files them here.
   if (created) {
-    const renamed = { ...current, name: category.name };
+    const renamed = withAlias({ ...current, name: category.name }, current.name);
     const categories = state.categories.map((c) => (c.id === categoryId ? renamed : c));
     return finish(state, state.photos, categories, [], [renamed]);
   }
   // Merge: move everything into the existing category; the old one is removed when empty.
+  const into = withAlias(category, current.name);
+  const merged = { ...state, categories: state.categories.map((c) => (c.id === into.id ? into : c)) };
   const ids = state.photos.filter((p) => p.categoryId === categoryId).map((p) => p.id);
-  return movePhotos(state, ids, { categoryId: category.id }, newId);
+  const change = movePhotos(merged, ids, { categoryId: category.id }, newId);
+  return { ...change, putCategories: [...change.putCategories, into] };
 }
 
 /**
@@ -205,9 +241,46 @@ export function syncWithDevice(state: LibraryState, assets: DeviceAsset[], newId
       importedAt: now,
       status: "queued",
       isScreenshot: a.isScreenshot,
+      ...(a.isVideo ? { isVideo: true, durationMs: a.durationMs } : {}),
       source: { kind: "native", assetId: a.id },
     }));
   const goneIds = new Set(gone);
   const photos = [...state.photos.filter((p) => !goneIds.has(p.id)), ...added];
   return finish(state, photos, state.categories, added, [], gone);
+}
+
+/**
+ * Folds categories that mean the same thing into one ("Shoes" into "Sneakers", "Tee" into
+ * "Shirts", "Basketball Shorts" into "Shorts"), moving their photos across. Seeded categories
+ * win, then the broader name, then the oldest. `merged` maps each removed id to the id its
+ * photos went to, so lessons can follow.
+ */
+export function mergeLookAlikeCategories(state: LibraryState): Change & { merged: Map<string, string> } {
+  const order = [...state.categories].sort(
+    (a, b) =>
+      Number(b.seeded) - Number(a.seeded) ||
+      a.name.trim().split(/\s+/).length - b.name.trim().split(/\s+/).length ||
+      a.createdAt - b.createdAt,
+  );
+  const kept: Category[] = [];
+  const merged = new Map<string, string>();
+  for (const c of order) {
+    const into = findMatchingCategory(kept, c.section, c.name);
+    if (into) merged.set(c.id, into.id);
+    else kept.push(c);
+  }
+  if (!merged.size) {
+    return { state, putPhotos: [], putCategories: [], deletedCategoryIds: [], deletedPhotoIds: [], merged };
+  }
+  const changed: Photo[] = [];
+  const photos = state.photos.map((p) => {
+    const to = p.categoryId && merged.get(p.categoryId);
+    if (!to) return p;
+    const next = { ...p, categoryId: to };
+    changed.push(next);
+    return next;
+  });
+  // Keep the original order of the list; the merged-away ones simply drop out.
+  const categories = state.categories.filter((c) => !merged.has(c.id));
+  return { state: { photos, categories }, putPhotos: changed, putCategories: [], deletedCategoryIds: [...merged.keys()], deletedPhotoIds: [], merged };
 }

@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { duplicateTotals, findDuplicates } from "../core/duplicates";
 import { categoriesWithNew, needsPerson } from "../core/library";
-import { formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
+import { countLabel, formatBytes, usageByCategory, usageBySection, type CategoryUsage } from "../core/storage";
 import { SECTIONS } from "../core/types";
+import { API, hasPasscode } from "../lib/api";
+import { canRate, rateApp } from "../lib/appReview";
 import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
+import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
 import { BackLayer, useBack } from "./back";
+import { DuplicatesView } from "./DuplicatesView";
 import { Toaster } from "./PhotoMenu";
 import { ReviewView } from "./ReviewView";
 import { Thumb } from "./Thumb";
 
-type View = { kind: "overview" } | { kind: "review" } | { kind: "category"; id: string };
+type View = { kind: "overview" } | { kind: "review" } | { kind: "duplicates" } | { kind: "category"; id: string };
 
 export function App() {
   const lib = useLibrary();
@@ -21,6 +26,7 @@ export function App() {
   const usage = useMemo(() => usageByCategory(lib.categories, lib.photos), [lib.categories, lib.photos]);
   const category = view.kind === "category" ? lib.categories.find((c) => c.id === view.id) : undefined;
   const toReview = useMemo(() => needsPerson(lib.photos).length, [lib.photos]);
+  const duplicates = useMemo(() => duplicateTotals(findDuplicates(lib.photos)), [lib.photos]);
   const withNew = useMemo(() => categoriesWithNew({ photos: lib.photos, categories: lib.categories }), [lib.photos, lib.categories]);
 
   // A category the AI created disappears once emptied; fall back to the overview.
@@ -67,7 +73,7 @@ export function App() {
         {!lib.native && (
           <>
             <button className="hide-small" onClick={() => add(true)}>Add folder</button>
-            <button className="primary" onClick={() => add()}>Add photos</button>
+            <button className="primary" onClick={() => add()}>Add photos &amp; videos</button>
           </>
         )}
       </header>
@@ -81,6 +87,12 @@ export function App() {
             <button className={`nav-item review-item ${view.kind === "review" ? "active" : ""}`} onClick={() => open({ kind: "review" })}>
               <span>To review</span>
               <span className="count">{toReview || ""}</span>
+            </button>
+          )}
+          {(duplicates.extras > 0 || view.kind === "duplicates") && (
+            <button className={`nav-item review-item ${view.kind === "duplicates" ? "active" : ""}`} onClick={() => open({ kind: "duplicates" })}>
+              <span>Duplicates</span>
+              <span className="count">{duplicates.extras || ""}</span>
             </button>
           )}
           {SECTIONS.map((s) => {
@@ -102,6 +114,13 @@ export function App() {
               </div>
             );
           })}
+          {canRate && (
+            <div className="nav-section">
+              <button className="nav-item" onClick={() => { setMenuOpen(false); rateApp().catch(() => {}); }}>
+                <span>Rate OrganizeIt ★</span>
+              </button>
+            </div>
+          )}
         </nav>
         {menuOpen && <button className="scrim" aria-label="Close categories" onClick={() => setMenuOpen(false)} />}
 
@@ -112,10 +131,20 @@ export function App() {
             <ConnectLibrary lib={lib} />
           ) : view.kind === "review" ? (
             <ReviewView lib={lib} onDone={() => open({ kind: "overview" })} />
+          ) : view.kind === "duplicates" ? (
+            <DuplicatesView lib={lib} onDone={() => open({ kind: "overview" })} />
           ) : category ? (
             <CategoryView lib={lib} category={category} onGone={() => open({ kind: "overview" })} />
           ) : (
-            <Overview lib={lib} usage={usage} onOpen={(id) => open({ kind: "category", id })} onReview={() => open({ kind: "review" })} onAdd={add} />
+            <Overview
+              lib={lib}
+              usage={usage}
+              duplicates={duplicates}
+              onOpen={(id) => open({ kind: "category", id })}
+              onReview={() => open({ kind: "review" })}
+              onDuplicates={() => open({ kind: "duplicates" })}
+              onAdd={add}
+            />
           )}
         </main>
       </div>
@@ -125,7 +154,15 @@ export function App() {
   );
 }
 
-function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage: CategoryUsage[]; onOpen: (id: string) => void; onReview: () => void; onAdd: (folder?: boolean) => void }) {
+function Overview({ lib, usage, duplicates, onOpen, onReview, onDuplicates, onAdd }: {
+  lib: Library;
+  usage: CategoryUsage[];
+  duplicates: { extras: number; bytes: number };
+  onOpen: (id: string) => void;
+  onReview: () => void;
+  onDuplicates: () => void;
+  onAdd: (folder?: boolean) => void;
+}) {
   const sections = usageBySection(usage);
   const total = usage.reduce((n, u) => n + u.bytes, 0);
   const used = usage.filter((u) => u.count > 0);
@@ -134,14 +171,26 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
   return (
     <div className="overview">
       <QueuePanel lib={lib} onReview={onReview} />
+      {duplicates.extras > 0 && (
+        <div className="queue-row duplicates-notice">
+          <span>
+            <strong>You have {duplicates.extras.toLocaleString()} duplicate photo{duplicates.extras === 1 ? "" : "s"}</strong>
+            <span className="muted small"> using {formatBytes(duplicates.bytes)}. Review them to keep the best copy and free up space.</span>
+          </span>
+          <button className="primary" onClick={onDuplicates}>Review duplicates</button>
+        </div>
+      )}
 
       {lib.native && SORT_LIMIT > 0 && (
         <p className="muted small">Test mode: sorting your newest {SORT_LIMIT.toLocaleString()} photos.</p>
       )}
       {lib.native && lib.permission === "limited" && (
         <div className="queue-row limited">
-          <span>OrganizeIt can only see the photos you selected. Allow full access to sort your whole library.</span>
-          <button onClick={lib.openSettings}>Open Settings</button>
+          <span>
+            OrganizeIt can only see the photos you picked, not your whole library. Allow full access so every photo gets sorted.
+            {lib.canMakeAlbums && " In Settings, tap Photos, then Full Access."}
+          </span>
+          <button className="primary" onClick={lib.allowFullAccess}>Allow full access</button>
         </div>
       )}
       {lib.photos.length === 0 && lib.native ? (
@@ -157,10 +206,10 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
             photos by exact item type. Anything new gets its own category, never a catch-all.
           </p>
           <div className="row">
-            <button className="primary big" onClick={() => onAdd()}>Add photos</button>
+            <button className="primary big" onClick={() => onAdd()}>Add photos &amp; videos</button>
             <button className="big hide-small" onClick={() => onAdd(true)}>Add a folder</button>
           </div>
-          <p className="muted small">On iPhone or Android, "Add photos" opens your Photos library. Photos stay on this device; only a small preview is sent for sorting.</p>
+          <p className="muted small">On iPhone or Android, "Add photos &amp; videos" opens your Photos library. Everything stays on this device; only a small preview is sent for sorting (a few still frames for a video).</p>
         </div>
       ) : (
         <>
@@ -169,7 +218,7 @@ function Overview({ lib, usage, onOpen, onReview, onAdd }: { lib: Library; usage
               <div key={s.id} className="stat">
                 <p className="eyebrow">{s.label}</p>
                 <p className="stat-value">{formatBytes(sections[s.id].bytes)}</p>
-                <p className="muted">{sections[s.id].count} photo{sections[s.id].count === 1 ? "" : "s"}</p>
+                <p className="muted">{countLabel(sections[s.id].count - sections[s.id].videos, sections[s.id].videos)}</p>
               </div>
             ))}
           </div>
@@ -228,9 +277,10 @@ function ConnectLibrary({ lib }: { lib: Library }) {
 function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
   const pending = lib.photos.filter((p) => p.status === "queued" || p.status === "classifying");
   const waiting = needsPerson(lib.photos);
+  const unsure = waiting.filter((p) => p.status === "review");
   const failed = waiting.filter((p) => p.status === "error");
   const connecting = lib.server === "checking" || lib.server === "offline";
-  if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan) return null;
+  if (!pending.length && !waiting.length && lib.server === "ok" && !lib.locked && !lib.scan && !lib.paywall) return null;
 
   return (
     <div className="queue">
@@ -252,6 +302,7 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
         </div>
       )}
       {lib.locked && lib.server === "ok" && <PasscodeForm lib={lib} />}
+      {lib.paywall && lib.server === "ok" && (lib.paywallHidden ? <PaywallReminder lib={lib} /> : <Paywall lib={lib} />)}
       {lib.server === "no-ai" && (
         <p className="error banner">
           {lib.aiProblem ?? "The sorting server doesn't have an Anthropic API key."} Add a working ANTHROPIC_API_KEY to the
@@ -260,10 +311,13 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
       )}
       {pending.length > 0 && (
         <div className="queue-row sorting">
-          <span className={lib.server === "ok" && !lib.locked ? "spinner" : ""} aria-hidden />
+          <span className={lib.server === "ok" && !lib.locked && !lib.paywall ? "spinner" : ""} aria-hidden />
           <span>
-            <strong>Sorting {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}…</strong>
+            <strong>
+              {lib.paywall ? "Waiting to sort" : "Sorting"} {pending.length.toLocaleString()} photo{pending.length === 1 ? "" : "s"}{lib.paywall ? "" : "…"}
+            </strong>
             {lib.sortRate && <span className="muted small"> {timeLeft(pending.length / lib.sortRate)}</span>}
+            <PlanNote lib={lib} />
           </span>
           {lib.sortedThisRun > 0 && (
             <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
@@ -276,8 +330,16 @@ function QueuePanel({ lib, onReview }: { lib: Library; onReview: () => void }) {
       {waiting.length > 0 && (
         <div className="queue-failed">
           <p>
-            <strong>{waiting.length.toLocaleString()} photo{waiting.length === 1 ? "" : "s"} need{waiting.length === 1 ? "s" : ""} your help.</strong>{" "}
-            OrganizeIt wasn't sure where {waiting.length === 1 ? "it goes" : "they go"}. Your answers teach it for next time.
+            {unsure.length > 0 && (
+              <>
+                <strong>{unsure.length.toLocaleString()} photo{unsure.length === 1 ? "" : "s"} need{unsure.length === 1 ? "s" : ""} your help.</strong>{" "}
+                OrganizeIt wasn't sure where {unsure.length === 1 ? "it goes" : "they go"}. Your answers teach it for next time.
+              </>
+            )}
+            {unsure.length > 0 && failed.length > 0 && " "}
+            {failed.length > 0 && (
+              <strong>{failed.length.toLocaleString()} photo{failed.length === 1 ? "" : "s"} couldn't be sent to be sorted.</strong>
+            )}
           </p>
           <ul className="mini-grid">
             {waiting.slice(0, 12).map((p) => (
@@ -311,29 +373,168 @@ function BackgroundNote({ lib }: { lib: Library }) {
   if (!lib.native || !b) return null;
   const when = b.lastAt ? new Date(b.lastAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
   return (
-    <p className="muted small">
-      {b.backgroundRefresh !== "on"
-        ? /android/i.test(navigator.userAgent)
-          ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
-          : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
-        : b.keepsGoingAfterClose
-          ? "You can close the app; sorting keeps going in the background."
-          : "Sorting pauses about 30 seconds after you close the app (iOS 26 lets it keep going), and catches up when iOS gives it time."}
-      {b.last && ` Last: ${b.last}${when ? ` (${when})` : ""}`}
-    </p>
+    <div className="background-note muted small">
+      <p>
+        {b.backgroundRefresh !== "on"
+          ? /android/i.test(navigator.userAgent)
+            ? "Sorting stops when you close the app because Android's battery settings restrict OrganizeIt. Set its battery use to Unrestricted in Settings → Apps → OrganizeIt."
+            : "Sorting stops when you close the app because Background App Refresh is off for OrganizeIt. Turn it on in Settings → General → Background App Refresh."
+          : b.keepsGoingAfterClose
+            ? "You can close the app; sorting keeps going in the background (up to 100 photos on battery, the rest while charging)."
+            : "Sorting pauses soon after you close the app, and catches up when the phone gives it time."}
+      </p>
+      {b.last && <p>Last: {b.last}{when ? ` (${when})` : ""}</p>}
+    </div>
+  );
+}
+
+/** How much of the free preview or the first month is used, while sorting. */
+function PlanNote({ lib }: { lib: Library }) {
+  const p = lib.plan;
+  if (!lib.subscriptions || lib.paywall) return null;
+  if (hasPasscode()) return <span className="muted small"> Owner passcode: no limit.</span>;
+  if (!p) return null;
+  if (!p.active && p.freeLimit > 0) {
+    return <span className="muted small"> Free preview: {Math.min(p.freeUsed, p.freeLimit)} of {p.freeLimit} photos.</span>;
+  }
+  if (p.active && p.limit > 0) {
+    return <span className="muted small"> {p.intro ? "First month" : "This month"}: {p.used.toLocaleString()} of {p.limit.toLocaleString()} photos.</span>;
+  }
+  return null;
+}
+
+/** The subscribe card, put away with "Not now": one quiet line that brings it back. */
+function PaywallReminder({ lib }: { lib: Library }) {
+  return (
+    <div className="queue-row limited">
+      <span className="muted small">
+        {lib.paywall!.reason === "limit" ? "Sorting is paused until your subscription renews." : "New photos wait here until you subscribe."}
+      </span>
+      {lib.paywall!.reason === "subscribe" && <button onClick={() => lib.hidePaywall(false)}>See plans</button>}
+    </div>
+  );
+}
+
+/** Sorting is paused until the person subscribes (or, in the $2 month, until it renews). */
+function Paywall({ lib }: { lib: Library }) {
+  const reason = lib.paywall!.reason;
+  const [offer, setOffer] = useState<Offer | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "busy" | "unavailable">("loading");
+  const [problem, setProblem] = useState<string | null>(null);
+  const [usePasscode, setUsePasscode] = useState(false);
+  const android = /android/i.test(navigator.userAgent);
+
+  useEffect(() => {
+    if (reason !== "subscribe") return;
+    monthlyOffer().then(
+      (o) => {
+        setOffer(o);
+        setState(o ? "ready" : "unavailable");
+      },
+      () => setState("unavailable"),
+    );
+  }, [reason]);
+
+  // The store has taken payment; the server hears about it from RevenueCat within moments.
+  const unlocked = async () => {
+    for (let i = 0; i < 5; i++) {
+      const p = await lib.refreshPlan(true);
+      if (p?.active) return;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    setProblem("Your purchase went through, but the server hasn't seen it yet. Close and reopen OrganizeIt in a minute.");
+  };
+
+  const run = async (action: () => Promise<boolean | void>) => {
+    setState("busy");
+    setProblem(null);
+    try {
+      if ((await action()) !== false) await unlocked();
+    } catch (err) {
+      setProblem(err instanceof Error ? err.message : "The store couldn't complete that. Try again.");
+    } finally {
+      setState(offer ? "ready" : "unavailable");
+    }
+  };
+
+  if (reason === "limit") {
+    return (
+      <div className="queue-row paywall">
+        <strong>Sorting is paused for this month.</strong>
+        <p className="muted small">{lib.paywall!.message}</p>
+        <button className="link small" onClick={() => lib.hidePaywall(true)}>OK</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="queue-row paywall">
+      <strong>Keep OrganizeIt sorting</strong>
+      <p className="muted small">{lib.paywall!.message}</p>
+      {offer && (
+        <p>
+          {offer.introPrice ? (
+            <>
+              <strong>{offer.introPrice}</strong> for your first month, then {offer.price} a month.
+            </>
+          ) : (
+            <>
+              <strong>{offer.price}</strong> a month.
+            </>
+          )}{" "}
+          New photos are sorted the moment you take them, and your whole library gets sorted.
+        </p>
+      )}
+      {state === "unavailable" && (
+        <p className="muted small">
+          {canBuy ? "The store isn't answering right now. Try again in a moment." : "Subscriptions aren't available in this version of the app yet."}
+        </p>
+      )}
+      {problem && <p className="error small">{problem}</p>}
+      <div className="row">
+        {offer && (
+          <button className="primary" disabled={state === "busy"} onClick={() => run(() => buy(offer))}>
+            {offer.introPrice ? `Start for ${offer.introPrice}` : "Subscribe"}
+          </button>
+        )}
+        {canBuy && (
+          <button disabled={state === "busy"} onClick={() => run(restore)}>Restore purchases</button>
+        )}
+      </div>
+      {offer && (
+        <p className="muted small fine-print">
+          Paid through your {android ? "Google Play" : "Apple"} account. The subscription renews each month at {offer.price} until you
+          cancel, which you can do any time in {android ? "Play Store → Payments & subscriptions → Subscriptions" : "Settings → your name → Subscriptions"},
+          at least 24 hours before it renews.{" "}
+          <a href={`${API}/terms.html`} target="_blank" rel="noreferrer">Terms</a> ·{" "}
+          <a href={`${API}/privacy.html`} target="_blank" rel="noreferrer">Privacy</a>
+        </p>
+      )}
+      <div className="row">
+        <button className="link small" disabled={state === "busy"} onClick={() => lib.hidePaywall(true)}>Not now</button>
+        {!usePasscode && <button className="link small" onClick={() => setUsePasscode(true)}>Have a passcode?</button>}
+      </div>
+      {usePasscode && <PasscodeForm lib={lib} />}
+    </div>
   );
 }
 
 function PasscodeForm({ lib }: { lib: Library }) {
   const [code, setCode] = useState("");
   const [state, setState] = useState<"idle" | "checking" | "wrong">("idle");
+  const [problem, setProblem] = useState<string | null>(null);
   return (
     <form
       className="queue-row passcode"
       onSubmit={async (e) => {
         e.preventDefault();
         setState("checking");
-        setState((await lib.unlock(code.trim()).catch(() => false)) ? "idle" : "wrong");
+        setProblem(null);
+        const ok = await lib.unlock(code.trim()).catch((err: unknown) => {
+          setProblem(err instanceof Error ? err.message : null);
+          return false;
+        });
+        setState(ok ? "idle" : "wrong");
       }}
     >
       <label htmlFor="passcode">
@@ -344,7 +545,7 @@ function PasscodeForm({ lib }: { lib: Library }) {
         <input id="passcode" type="password" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="current-password" />
         <button className="primary" type="submit" disabled={!code.trim() || state === "checking"}>Unlock</button>
       </div>
-      {state === "wrong" && <p className="error small">That passcode didn't work.</p>}
+      {state === "wrong" && <p className="error small">{problem ?? "That passcode didn't work."}</p>}
     </form>
   );
 }

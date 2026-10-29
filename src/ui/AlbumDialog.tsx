@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { defaultAlbumName, tidyAlbumName } from "../core/albums";
 import { albumsCopyPhotos } from "../lib/photoLibrary";
 import { BackLayer, useBack } from "./back";
@@ -15,7 +16,7 @@ export function AlbumDialog(props: {
   const title = tidyAlbumName(name);
   useBack(true, props.onClose, BackLayer.dialog);
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={props.onClose}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="Send to Big Cartel album" onClick={(e) => e.stopPropagation()}>
         <h2>Send {props.count} photo{props.count === 1 ? "" : "s"} to an album</h2>
@@ -52,6 +53,7 @@ export function AlbumDialog(props: {
           <button onClick={props.onClose}>Cancel</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

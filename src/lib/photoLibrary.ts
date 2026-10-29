@@ -8,11 +8,18 @@ import type { DeleteTarget } from "../core/storage";
 export type PermissionStatus = "granted" | "limited" | "denied" | "prompt";
 
 interface PhotoLibraryPlugin {
-  checkPermission(): Promise<{ status: PermissionStatus }>;
-  requestPermission(): Promise<{ status: PermissionStatus }>;
+  /** `videos` is false on Android when photos are allowed but videos aren't (yet). */
+  checkPermission(): Promise<{ status: PermissionStatus; videos?: boolean }>;
+  requestPermission(): Promise<{ status: PermissionStatus; videos?: boolean }>;
   openSettings(): Promise<void>;
   list(options: { offset: number; limit: number }): Promise<{ assets: DeviceAsset[]; total: number; nextOffset: number | null }>;
-  getImage(options: { id: string; maxSide: number; quality?: number }): Promise<{ data: string; width: number; height: number }>;
+  /**
+   * A JPEG of a photo, or of a video's opening frame. With `frames`, a video comes back as six
+   * frames from across the clip in a grid instead, for sorting.
+   */
+  getImage(options: { id: string; maxSide: number; quality?: number; frames?: boolean }): Promise<{ data: string; width: number; height: number }>;
+  /** Where a video can be played from: a file path (iOS) or content URI (Android). */
+  getVideo(options: { id: string }): Promise<{ path: string }>;
   deleteAssets(options: { ids: string[] }): Promise<{ deleted: boolean }>;
   /** Fires the moment photos are added to or removed from the library while the app runs. */
   addListener(event: "libraryChanged", listener: (info: { added?: number }) => void): Promise<PluginListenerHandle>;
@@ -25,6 +32,8 @@ interface PhotoLibraryPlugin {
   copyImage(options: { id: string }): Promise<void>;
   /** Opens the phone's share sheet for a photo. */
   shareImage(options: { id: string }): Promise<{ completed: boolean }>;
+  /** An id for this phone that survives deleting and reinstalling the app. Empty if unavailable. */
+  deviceId(): Promise<{ id: string }>;
 }
 
 export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");

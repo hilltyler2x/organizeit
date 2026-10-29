@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
 import { addLessons, lessonsForPrompt, lessonsFromMove, MAX_LESSONS } from "../src/core/lessons";
-import { applyClassification, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
+import { applyClassification, requeueForResort, SORT_VERSION, movePhotos, needsPerson, renameCategory, type LibraryState } from "../src/core/library";
 import { usageByCategory } from "../src/core/storage";
 import type { Lesson, Photo } from "../src/core/types";
 
@@ -16,7 +16,7 @@ function start(...photos: Photo[]): LibraryState {
   return { photos, categories: seedCategories(newId) };
 }
 
-const unsure = { section: "products" as const, category: "Sneakers", label: "black slides", confidence: 0.4 };
+const unsure = { section: "products" as const, category: "Sneakers", label: "black slides", confidence: 0.2 };
 
 describe("photos the AI isn't sure about", () => {
   it("wait for the person instead of being filed, and no category is created for the guess", () => {
@@ -100,5 +100,26 @@ describe("learning from corrections", () => {
     expect(lessonsForPrompt(lessons, s.categories)).toEqual([{ label: "black slides", section: "products", category: "Slides", wrong: "Sneakers" }]);
     // If the category is gone, the name it had is still taught.
     expect(lessonsForPrompt(lessons, [])[0].category).toBe("Sandals");
+  });
+});
+
+describe("photos an older sorter left for the person", () => {
+  it("are queued to be sorted again once, and what the current sorter still can't place stays", () => {
+    const left = (id: string, status: "review" | "error", sortVersion?: number): Photo => ({
+      ...photo(id),
+      status,
+      label: "black slides",
+      confidence: 0.4,
+      suggestion: { section: "products", category: "Sandals" },
+      sortVersion,
+    });
+    const c = requeueForResort(start(left("a", "review"), left("b", "error"), left("c", "review", SORT_VERSION)))!;
+    expect(c.state.photos.map((p) => p.status)).toEqual(["queued", "queued", "review"]);
+    expect(c.putPhotos.map((p) => p.id)).toEqual(["a", "b"]);
+    expect(needsPerson(c.state.photos).map((x) => x.id)).toEqual(["c"]);
+    // Sorted again and still unsure: it stays for the person and isn't queued a second time.
+    const again = applyClassification(c.state, "a", unsure, newId).state;
+    expect(again.photos.find((p) => p.id === "a")!.sortVersion).toBe(SORT_VERSION);
+    expect(requeueForResort({ ...again, photos: again.photos.filter((p) => p.id !== "b") })).toBeNull();
   });
 });

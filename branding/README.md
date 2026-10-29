@@ -7,5 +7,6 @@
   2. `node branding/store/make-screenshots.mjs http://localhost:5199`
   3. Upload `branding/store/out/` to App Store Connect: `iphone-6.9-*` (1320×2868) and `ipad-13-*` (2064×2752).
   Headlines live in `branding/store/captions.mjs`.
+  4. Google Play: `android-phone-*` (1080×1920) are the phone screenshots, `play-feature-graphic.png` (1024×500) and `play-icon-512.png` the listing graphics. Pass a set name as a second argument to build just one set, e.g. `android-phone`.
 
 Both scripts need Playwright (`npm i --no-save playwright`) and ImageMagick (`convert`).

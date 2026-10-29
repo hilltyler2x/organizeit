@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedCategories } from "../src/core/categories";
-import { applyClassification, applyClassifications, movePhotos, removePhotos, renameCategory, type LibraryState } from "../src/core/library";
+import { applyClassification, applyClassifications, mergeLookAlikeCategories, movePhotos, removePhotos, renameCategory, type LibraryState } from "../src/core/library";
 import { deletedNotice, formatBytes, usageByCategory } from "../src/core/storage";
 import type { Photo } from "../src/core/types";
 
@@ -89,7 +89,7 @@ describe("applyClassifications", () => {
       [
         { photoId: "a", result: { section: "products", category: "Sneakers", label: "Jordan 1", confidence: 0.95 } },
         { photoId: "b", result: { section: "products", category: "Sneakers", label: "Dunk Low", confidence: 0.9 } },
-        { photoId: "c", result: { section: "products", category: "Bags", label: "tote", confidence: 0.4 } },
+        { photoId: "c", result: { section: "products", category: "Bags", label: "tote", confidence: 0.2 } },
       ],
       newId,
     );
@@ -156,5 +156,48 @@ describe("deletedNotice", () => {
     );
     expect(deletedNotice(3, 3 * 1024 * 1024, "android")).toBe("Deleted 3 photos (3.0 MB) from your phone.");
     expect(deletedNotice(2, 500, "organizeit")).toBe("Removed 2 photos (500 B) from OrganizeIt.");
+  });
+});
+
+describe("mergeLookAlikeCategories", () => {
+  it("folds look-alike categories into one and moves their photos", () => {
+    const s = start({ ...photo("a"), status: "sorted" }, { ...photo("b"), status: "sorted" }, { ...photo("c"), status: "sorted" }, { ...photo("d"), status: "sorted" });
+    const shirts = s.categories.find((c) => c.name === "Shirts")!;
+    const extra = [
+      { id: "tee", section: "products" as const, name: "Tees", seeded: false, createdAt: 1 },
+      { id: "kicks", section: "products" as const, name: "Sneakers", seeded: false, createdAt: 2 },
+      { id: "shoes", section: "products" as const, name: "Shoes", seeded: false, createdAt: 3 },
+      { id: "run", section: "products" as const, name: "Running Shoes", seeded: false, createdAt: 0 },
+    ];
+    const state: LibraryState = {
+      categories: [...s.categories, ...extra],
+      photos: [
+        { ...s.photos[0], categoryId: "tee", filedAt: 5 },
+        { ...s.photos[1], categoryId: "shoes" },
+        { ...s.photos[2], categoryId: "run" },
+        { ...s.photos[3], categoryId: "kicks" },
+      ],
+    };
+    const r = mergeLookAlikeCategories(state);
+    expect([...r.merged.entries()].sort()).toEqual([["run", "kicks"], ["shoes", "kicks"], ["tee", shirts.id]]);
+    expect(r.state.categories.map((c) => c.id)).not.toContain("tee");
+    expect(r.state.photos.map((p) => p.categoryId)).toEqual([shirts.id, "kicks", "kicks", "kicks"]);
+    // Still counts as filed by the AI, so the "new" dot carries over.
+    expect(r.state.photos[0].filedAt).toBe(5);
+    expect(r.putPhotos).toHaveLength(3);
+    expect(r.deletedCategoryIds.sort()).toEqual(["run", "shoes", "tee"]);
+  });
+
+  it("changes nothing when every category is distinct", () => {
+    const s = start();
+    const r = mergeLookAlikeCategories(s);
+    expect(r.merged.size).toBe(0);
+    expect(r.state).toBe(s);
+  });
+
+  it("keeps sections apart", () => {
+    const s = start();
+    const state = { ...s, categories: [...s.categories, { id: "ph", section: "personal" as const, name: "Hats", seeded: false, createdAt: 1 }] };
+    expect(mergeLookAlikeCategories(state).merged.size).toBe(0);
   });
 });

@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { seedCategories } from "../core/categories";
 import {
   applyClassifications,
+  requeueForResort,
+  SORT_VERSION,
   markCategorySeen,
+  mergeLookAlikeCategories,
   movePhotos,
   removePhotos,
   renameCategory,
@@ -11,23 +14,65 @@ import {
   type LibraryState,
 } from "../core/library";
 import { applyBackgroundResults, backgroundQueue } from "../core/background";
-import { addLessons, lessonsForPrompt, lessonsFromMove } from "../core/lessons";
+import { isOldFingerprint, markNotDuplicate, pairsToLookAt, setHashes, setPairVerdicts } from "../core/duplicates";
+import { alsoMove, followHabits } from "../core/habits";
+import { addLessons, lessonsForPrompt, lessonsFromMove, relinkLessons } from "../core/lessons";
+import { SORTED_ENOUGH, freedEnough } from "../core/reviews";
 import { deletedNotice } from "../core/storage";
 import type { Lesson, Photo, Section } from "../core/types";
-import { API, ApiError, classifyBatch, currentPasscode, hasPasscode, serverStatus, unlock } from "./api";
+import {
+  API,
+  ApiError,
+  classifyBatch,
+  currentPasscode,
+  currentUserId,
+  hasPasscode,
+  serverStatus,
+  setUserId,
+  subscriptionMode,
+  subscriptionStatus,
+  unlock,
+  type Subscription,
+} from "./api";
+import { happyMoment } from "./appReview";
+import { startPurchases } from "./purchases";
 import { BackgroundSort, type BackgroundSortStatus } from "./backgroundSort";
 import * as store from "./db";
+import { photoHash, sameInDetail } from "./fingerprint";
 import { decode, resize } from "./image";
 import { classifierImage } from "./media";
+import { readVideo } from "./video";
 import { PhotoLibrary, canMakeAlbums, deviceDeleteTarget, isNativeApp, listAllAssets, type PermissionStatus } from "./photoLibrary";
-import type { PickedPhoto } from "./photoSource";
+import { isVideoType, type PickedPhoto } from "./photoSource";
 
 const newId = () => crypto.randomUUID();
+
+const ASKED_VIDEOS_KEY = "organizeit.askedForVideos";
+function askedForVideos(): boolean {
+  try {
+    return localStorage.getItem(ASKED_VIDEOS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function rememberAskedForVideos() {
+  try {
+    localStorage.setItem(ASKED_VIDEOS_KEY, "1");
+  } catch {
+    // Private storage unavailable: asked again next time, which is harmless.
+  }
+}
 // Optional cap while testing: only the newest N photos on the phone are sorted.
 export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 // Photos go to the server several at a time, with a few requests in flight at once.
 const BATCH_SIZE = 6;
 const CONCURRENCY = 4;
+// Duplicate fingerprints are worked out a chunk of photos at a time, alongside sorting.
+const HASH_CHUNK = 40;
+const HASH_CONCURRENCY = 4;
+
+/** Errors about the passcode or subscription, which say nothing about the photo itself. */
+const ACCESS_ERROR = /passcode|subscri/i;
 
 export function useLibrary() {
   const [state, setState] = useState<LibraryState>({ photos: [], categories: [] });
@@ -37,6 +82,14 @@ export function useLibrary() {
   const [aiProblem, setAiProblem] = useState<string | null>(null);
   const ai = server === "ok" ? true : server === "no-ai" ? false : null;
   const [locked, setLocked] = useState(false);
+  // Inside the phone app, once the server sells subscriptions: who this is to the server, their
+  // plan, and why sorting is paused for want of one (no subscription, or the month's photos used).
+  const [userReady, setUserReady] = useState(!isNativeApp);
+  const [subscriptions, setSubscriptions] = useState(false);
+  const [plan, setPlan] = useState<Subscription | null>(null);
+  const [paywall, setPaywall] = useState<{ reason: "subscribe" | "limit"; message: string } | null>(null);
+  // "Not now" on the subscribe card: shrinks it to one line until the app is next opened.
+  const [paywallHidden, setPaywallHidden] = useState(false);
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
@@ -83,12 +136,35 @@ export function useLibrary() {
         categories = seedCategories(newId);
         await store.putCategories(categories);
       }
-      // Anything interrupted mid-classification goes back in the queue.
-      const requeue = photos.filter((p) => p.status === "classifying").map((p) => ({ ...p, status: "queued" as const }));
+      // Anything interrupted mid-classification goes back in the queue, and so does anything
+      // turned away over the passcode or subscription rather than the photo itself.
+      const requeue = photos
+        .filter((p) => p.status === "classifying" || (p.status === "error" && ACCESS_ERROR.test(p.error ?? "")))
+        .map((p) => ({ ...p, status: "queued" as const, error: undefined }));
       if (requeue.length) {
         await store.putPhotos(requeue);
         const byId = new Map(requeue.map((p) => [p.id, p]));
         photos = photos.map((p) => byId.get(p.id) ?? p);
+      }
+      // Fold together categories that mean the same thing, from before this was enforced or
+      // made by an older build ("Shoes" and "Sneakers", "Tee" and "Shirts").
+      const tidy = mergeLookAlikeCategories({ photos, categories });
+      if (tidy.merged.size) {
+        ({ photos, categories } = tidy.state);
+        const relinked = relinkLessons(lessons, tidy.merged, categories);
+        const byId = new Map(relinked.map((l) => [l.id, l]));
+        lessonsRef.current = lessons.map((l) => byId.get(l.id) ?? l);
+        await Promise.all([
+          store.putPhotos(tidy.putPhotos),
+          store.deleteCategories(tidy.deletedCategoryIds),
+          relinked.length ? store.saveLessons(relinked, []) : null,
+        ]);
+      }
+      // Photos an older sorter left for the person are sorted again by the current one.
+      const resort = requeueForResort({ photos, categories });
+      if (resort) {
+        await store.putPhotos(resort.putPhotos);
+        photos = resort.state.photos;
       }
       stateRef.current = { photos, categories };
       setState(stateRef.current);
@@ -116,8 +192,42 @@ export function useLibrary() {
     lastAnswer.current = Date.now();
     setServer(s.ai ? "ok" : "no-ai");
     setAiProblem(null);
-    setLocked(s.passcodeRequired && !hasPasscode());
+    const selling = s.subscriptions && isNativeApp;
+    if (selling) subscriptionMode();
+    setSubscriptions(selling);
+    // On the phone a subscription stands in for the passcode.
+    setLocked(s.passcodeRequired && !hasPasscode() && !selling);
   }, []);
+
+  useEffect(() => {
+    if (!isNativeApp) return;
+    startPurchases().then((id) => {
+      setUserId(id);
+      setUserReady(true);
+    });
+  }, []);
+
+  /** Asks the server about this person's plan; lifts the pause once they can sort again. */
+  const refreshPlan = useCallback(async (fresh = false) => {
+    const p = await subscriptionStatus(fresh);
+    if (!p) return null;
+    setPlan(p);
+    if (hasPasscode() || (p.active && (p.limit === 0 || p.used < p.limit))) setPaywall(null);
+    else if (p.active) setPaywall({ reason: "limit", message: `You've sorted the ${p.limit.toLocaleString()} photos this month includes. The rest are sorted when your subscription renews.` });
+    else if (p.freeUsed >= p.freeLimit) {
+      setPaywall({ reason: "subscribe", message: p.freeLimit ? `That's your ${p.freeLimit} free photos. Subscribe to sort the rest.` : "Subscribe to start sorting." });
+    }
+    return p;
+  }, []);
+
+  useEffect(() => {
+    if (!subscriptions || !userReady) return;
+    refreshPlan();
+    // Coming back to the app may follow a purchase, a renewal or a new month.
+    const onVisible = () => document.visibilityState === "visible" && refreshPlan(true);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [subscriptions, userReady, refreshPlan]);
 
   useEffect(() => {
     checkServer();
@@ -172,7 +282,7 @@ export function useLibrary() {
     if (unreadable.length) {
       await markAll(unreadable.map((p) => p.id), (p) => {
         const err = (images[group.indexOf(p)] as { err: unknown }).err;
-        return { status: "error", error: err instanceof Error ? err.message : String(err) };
+        return { status: "error", sortVersion: SORT_VERSION, error: err instanceof Error ? err.message : String(err) };
       });
     }
     if (!ready.length) return;
@@ -186,23 +296,44 @@ export function useLibrary() {
           width: photo.width,
           height: photo.height,
           isScreenshot: photo.isScreenshot ?? false,
+          ...(photo.isVideo ? { isVideo: true, durationSec: Math.round((photo.durationMs ?? 0) / 1000) } : {}),
         })),
         categories: stateRef.current.categories,
         lessons: lessonsForPrompt(lessonsRef.current, stateRef.current.categories),
       });
+      // Filed the way this person files things (see core/habits.ts).
       const filed = ready.flatMap((photo, i) => {
         const r = results[i];
-        return "error" in r ? [] : [{ photoId: photo.id, result: r }];
+        return "error" in r ? [] : [{ photoId: photo.id, result: followHabits(r, lessonsRef.current, stateRef.current) }];
       });
       if (filed.length) await commit(applyClassifications(stateRef.current, filed, newId));
       const failed = ready.filter((_, i) => "error" in results[i]);
       if (failed.length) {
-        await markAll(failed.map((p) => p.id), (p) => ({ status: "error", error: (results[ready.indexOf(p)] as { error: string }).error }));
+        await markAll(failed.map((p) => p.id), (p) => ({ status: "error", sortVersion: SORT_VERSION, error: (results[ready.indexOf(p)] as { error: string }).error }));
       }
       serverAnswered();
       recordFinished(ready.length);
     } catch (err) {
       const backToQueue = () => markAll(ready.map((p) => p.id), () => ({ status: "queued", error: undefined }));
+      if (err instanceof ApiError && err.status === 402) {
+        // No subscription, or this month's photos are used up: wait in the queue.
+        setPaywall({ reason: err.reason === "limit" ? "limit" : "subscribe", message: err.message });
+        await backToQueue();
+        refreshPlan();
+        return;
+      }
+      if (err instanceof ApiError && err.reason === "plan-check") {
+        // The server couldn't reach the subscription service: try again shortly.
+        await backToQueue();
+        await new Promise((r) => setTimeout(r, 10_000));
+        return;
+      }
+      if (err instanceof ApiError && err.reason === "locked-out") {
+        // Too many wrong passcodes from this network: nothing wrong with the photos.
+        await backToQueue();
+        await new Promise((r) => setTimeout(r, 60_000));
+        return;
+      }
       if (err instanceof ApiError && err.status === 401) {
         // Wrong or missing passcode: wait in the queue until it is entered.
         setLocked(true);
@@ -237,11 +368,89 @@ export function useLibrary() {
       const tries = new Map(ready.map((p) => [p.id, (attempts.current.get(p.id) ?? 0) + 1]));
       for (const [id, n] of tries) attempts.current.set(id, n);
       await markAll(ready.map((p) => p.id), (p) =>
-        retryable && tries.get(p.id)! < 4 ? { status: "queued", error: undefined } : { status: "error", error: message },
+        // A connection that kept failing is tried again on the next launch; a photo the server
+        // turned down is not, until the sorter improves.
+        retryable && tries.get(p.id)! < 4 ? { status: "queued", error: undefined } : { status: "error", ...(retryable ? {} : { sortVersion: SORT_VERSION }), error: message },
       );
       if (retryable) await new Promise((r) => setTimeout(r, 5000));
     }
-  }, [commit, markAll, recordFinished, serverAnswered]);
+  }, [commit, markAll, recordFinished, serverAnswered, refreshPlan]);
+
+  // Fingerprint every photo so duplicates can be spotted. Runs on its own next to sorting, a
+  // chunk at a time, and picks up new photos as they arrive. A photo that couldn't be read is
+  // tried again once each time the app starts (e.g. it was in iCloud with no signal).
+  const hashing = useRef(false);
+  const retried = useRef(new Set<string>());
+  // Fingerprints from before the stricter duplicate check are worked out again.
+  const needsHash = (p: Photo) =>
+    p.hash === undefined || (p.hash === "" && !retried.current.has(p.id)) || (isOldFingerprint(p.hash) && !retried.current.has(p.id));
+  const [unchecked, setUnchecked] = useState(0);
+  const hashPhotos = useCallback(async () => {
+    if (hashing.current) return;
+    hashing.current = true;
+    try {
+      for (;;) {
+        const todo = stateRef.current.photos.filter(needsHash).sort((a, b) => b.takenAt - a.takenAt);
+        setUnchecked(todo.length);
+        if (!todo.length) return;
+        const chunk = todo.slice(0, HASH_CHUNK);
+        for (const p of chunk) retried.current.add(p.id);
+        const hashes = new Map<string, string>();
+        for (let i = 0; i < chunk.length; i += HASH_CONCURRENCY) {
+          await Promise.all(
+            chunk.slice(i, i + HASH_CONCURRENCY).map((p) =>
+              photoHash(p).then((h) => hashes.set(p.id, h), () => hashes.set(p.id, "")),
+            ),
+          );
+        }
+        // Photos deleted while this chunk was read are simply not found.
+        await commit(setHashes(stateRef.current, hashes));
+      }
+    } finally {
+      hashing.current = false;
+    }
+  }, [commit]);
+
+  useEffect(() => {
+    if (ready && state.photos.some(needsHash)) hashPhotos();
+  }, [ready, state, hashPhotos]);
+
+  // Look-alikes that might be different pictures (a resized copy, or a receipt with another
+  // number) are compared at full detail before they show up as duplicates. A pair that can't be
+  // read is tried again next time the app starts.
+  const looking = useRef(false);
+  const lookFailed = useRef(new Set<string>());
+  const lookClosely = useCallback(async () => {
+    if (looking.current) return;
+    looking.current = true;
+    try {
+      for (;;) {
+        const pairs = pairsToLookAt(stateRef.current.photos).filter(([a, b]) => !lookFailed.current.has(`${a.id}:${b.id}`));
+        if (!pairs.length) return;
+        const verdicts: [Photo, Photo, boolean][] = [];
+        for (const [a, b] of pairs.slice(0, 10)) {
+          try {
+            verdicts.push([a, b, await sameInDetail(a, b)]);
+          } catch {
+            lookFailed.current.add(`${a.id}:${b.id}`);
+          }
+        }
+        if (verdicts.length) await commit(setPairVerdicts(stateRef.current, verdicts));
+      }
+    } finally {
+      looking.current = false;
+    }
+  }, [commit]);
+
+  // Checked a couple of seconds after the library changes (not on every change while sorting).
+  const lookTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (!ready || lookTimer.current) return;
+    lookTimer.current = setTimeout(() => {
+      lookTimer.current = undefined;
+      lookClosely();
+    }, 2000);
+  }, [ready, state, lookClosely]);
 
   // Reading the phone's library also collects what was sorted while the app was closed, so
   // the queue waits for it rather than sorting those photos a second time.
@@ -252,7 +461,7 @@ export function useLibrary() {
   // Work through the queue newest first, a batch of photos per request and a few requests
   // at a time.
   const pump = useCallback(() => {
-    if (!ai || locked || scanning.current) return;
+    if (!ai || locked || paywall || !userReady || scanning.current) return;
     const free = CONCURRENCY - batches.current;
     if (free <= 0) return;
     const queued = stateRef.current.photos
@@ -269,12 +478,16 @@ export function useLibrary() {
         pump();
       });
     }
-  }, [ai, locked, classifyGroup]);
+  }, [ai, locked, paywall, userReady, classifyGroup]);
 
-  // Once the queue is empty, the next round of sorting starts its progress from zero.
+  // Once the queue is empty, the next round of sorting starts its progress from zero. A big
+  // round finishing is a good moment to ask for a review.
   const idle = !state.photos.some((p) => p.status === "queued" || p.status === "classifying");
+  const sortedRef = useRef(0);
+  sortedRef.current = sortedThisRun;
   useEffect(() => {
     if (!idle) return;
+    if (sortedRef.current >= SORTED_ENOUGH) happyMoment("sorted");
     finished.current = [];
     setSortedThisRun(0);
     setSortRate(null);
@@ -297,7 +510,13 @@ export function useLibrary() {
     scanning.current = true;
     rescan.current = false;
     try {
-      const { status } = await PhotoLibrary.checkPermission();
+      let { status, videos } = await PhotoLibrary.checkPermission();
+      // Android asks for photos and videos separately. Someone who allowed photos before
+      // videos were sorted too is asked once for videos.
+      if (status === "granted" && videos === false && !askedForVideos()) {
+        rememberAskedForVideos();
+        ({ status } = await PhotoLibrary.requestPermission());
+      }
       setPermission(status);
       if (status !== "granted" && status !== "limited") return;
       setScan({ done: 0, total: 0 });
@@ -305,7 +524,10 @@ export function useLibrary() {
       if (SORT_LIMIT) assets = assets.sort((a, b) => b.createdAt - a.createdAt).slice(0, SORT_LIMIT);
       await commit(syncWithDevice(stateRef.current, assets, newId));
       const { results } = await BackgroundSort.takeResults().catch(() => ({ results: [] }));
-      if (results.length) await commit(applyBackgroundResults(stateRef.current, results, newId));
+      if (results.length) {
+        const habits = results.map((r) => ({ ...r, result: followHabits(r.result, lessonsRef.current, stateRef.current) }));
+        await commit(applyBackgroundResults(stateRef.current, habits, newId));
+      }
       scanned.current = true;
       BackgroundSort.status().then(setBackground, () => setBackground(null));
     } finally {
@@ -339,11 +561,13 @@ export function useLibrary() {
   // categories and the lessons. Sent shortly after anything changes, and right away when the
   // app is being closed.
   const syncBackground = useCallback(() => {
-    if (!isNativeApp || !API || !scanned.current) return;
+    // Without the phone's id the server can't tell the owner's phone from any other.
+    if (!isNativeApp || !API || !scanned.current || !currentUserId()) return;
     const s = stateRef.current;
     BackgroundSort.configure({
       apiUrl: API,
       passcode: currentPasscode(),
+      userId: currentUserId(),
       categories: s.categories.map((c) => ({ section: c.section, name: c.name })),
       lessons: lessonsForPrompt(lessonsRef.current, s.categories),
       ...backgroundQueue(s),
@@ -354,7 +578,7 @@ export function useLibrary() {
     if (!ready || !isNativeApp) return;
     const timer = setTimeout(syncBackground, 1500);
     return () => clearTimeout(timer);
-  }, [ready, state, lessonCount, locked, syncBackground]);
+  }, [ready, state, lessonCount, locked, userReady, syncBackground]);
 
   useEffect(() => {
     if (!isNativeApp) return;
@@ -368,6 +592,19 @@ export function useLibrary() {
     setPermission(status);
     if (status === "granted" || status === "limited") await scanDevice();
     else if (status === "denied") await PhotoLibrary.openSettings();
+  }, [scanDevice]);
+
+  // With "Limited" (iPhone) or "Selected photos" (Android 14+) access the app only sees part of
+  // the library. Android shows its permission dialog again, with "Allow all"; iPhone only lets
+  // the person change it in Settings. Either way the library is read again once they come back.
+  const allowFullAccess = useCallback(async () => {
+    if (deviceDeleteTarget === "android") {
+      const { status } = await PhotoLibrary.requestPermission();
+      setPermission(status);
+      if (status === "granted" || status === "limited") await scanDevice();
+      if (status === "granted") return;
+    }
+    await PhotoLibrary.openSettings();
   }, [scanDevice]);
 
   /**
@@ -385,8 +622,16 @@ export function useLibrary() {
       if (!deleted) return null;
     }
     await commit(removePhotos(stateRef.current, ids));
+    const freed = chosen.reduce((n, p) => n + p.bytes, 0);
+    if (freedEnough(chosen.length, freed)) happyMoment("freed");
     const target = assetIds.length ? deviceDeleteTarget : "organizeit";
-    return deletedNotice(chosen.length, chosen.reduce((n, p) => n + p.bytes, 0), target);
+    const videos = chosen.filter((p) => p.isVideo).length;
+    return deletedNotice(chosen.length, freed, target, videos);
+  }, [commit]);
+
+  /** The person says photos flagged as duplicates are not copies of each other. */
+  const keepAll = useCallback(async (ids: string[]) => {
+    await commit(markNotDuplicate(stateRef.current, ids));
   }, [commit]);
 
   /** Clears a category's "new" dot once the person has opened it. */
@@ -407,19 +652,29 @@ export function useLibrary() {
   const importPhotos = useCallback(async (picked: PickedPhoto[]) => {
     for (const item of picked) {
       try {
-        const { width, height, bitmap } = await decode(item.file);
-        const thumb = await resize(bitmap, 480, 0.78);
-        bitmap.close();
+        const video = isVideoType(item.type) ? await readVideo(item.file, 480) : null;
+        let size: { width: number; height: number };
+        let thumb: Blob;
+        if (video) {
+          size = video;
+          thumb = video.poster;
+        } else {
+          const { width, height, bitmap } = await decode(item.file);
+          size = { width, height };
+          thumb = await resize(bitmap, 480, 0.78);
+          bitmap.close();
+        }
         const photo: Photo = {
           id: newId(),
           fileName: item.name,
           mimeType: item.type,
           bytes: item.file.size,
-          width,
-          height,
+          width: size.width,
+          height: size.height,
           takenAt: item.lastModified,
           importedAt: Date.now(),
           status: "queued",
+          ...(video ? { isVideo: true, durationMs: video.durationMs } : {}),
           source: item.source,
         };
         await store.addPhoto(photo, item.file, thumb);
@@ -427,23 +682,48 @@ export function useLibrary() {
         stateRef.current = { ...s, photos: [...s.photos, photo] };
         setState(stateRef.current);
       } catch {
-        console.warn(`Skipped ${item.name}: this browser cannot read that image format.`);
+        console.warn(`Skipped ${item.name}: this browser cannot read that format.`);
       }
     }
   }, []);
 
-  /** Moves photos and remembers any correction so later sorts get it right on their own. */
-  const move = useCallback(async (ids: string[], target: { categoryId: string } | { section: Section; name: string }) => {
-    const before = stateRef.current;
-    const change = movePhotos(before, ids, target, newId);
-    await commit(change);
-    const learned = lessonsFromMove(before, change.state, ids, newId);
-    if (!learned.length) return;
+  const keepLessons = async (learned: Lesson[]) => {
     const { lessons, dropped } = addLessons(lessonsRef.current, learned);
     lessonsRef.current = lessons;
     setLessonCount(lessons.length);
     const keep = new Set(lessons.map((l) => l.id));
     await store.saveLessons(learned.filter((l) => keep.has(l.id)), [...dropped, ...learned.filter((l) => !keep.has(l.id)).map((l) => l.id)]);
+  };
+
+  /**
+   * Moves photos and remembers any correction so later sorts get it right on their own. Photos
+   * the AI put in the same wrong place that look like the moved ones go along. Returns how
+   * many of those moved too.
+   */
+  const move = useCallback(async (ids: string[], target: { categoryId: string } | { section: Section; name: string }) => {
+    const before = stateRef.current;
+    const change = movePhotos(before, ids, target, newId);
+    await commit(change);
+    const learned = lessonsFromMove(before, change.state, ids, newId);
+    const others = alsoMove(before, change.state, ids);
+    const to = change.state.photos.find((p) => p.id === ids[0])?.categoryId;
+    if (others.length && to) await commit(movePhotos(stateRef.current, others, { categoryId: to }, newId));
+    if (learned.length) await keepLessons(learned);
+    return others.length;
+  }, [commit]);
+
+  /** Renames a category. Renaming it to one that exists merges them, and lessons follow. */
+  const rename = useCallback(async (categoryId: string, name: string) => {
+    const change = renameCategory(stateRef.current, categoryId, name, newId);
+    await commit(change);
+    if (!change.deletedCategoryIds.includes(categoryId)) return;
+    const into = change.putCategories.find((c) => c.id !== categoryId);
+    if (!into) return;
+    const relinked = relinkLessons(lessonsRef.current, new Map([[categoryId, into.id]]), change.state.categories);
+    if (!relinked.length) return;
+    const byId = new Map(relinked.map((l) => [l.id, l]));
+    lessonsRef.current = lessonsRef.current.map((l) => byId.get(l.id) ?? l);
+    await store.saveLessons(relinked, []);
   }, [commit]);
 
   const retry = useCallback(async (ids: string[]) => {
@@ -471,11 +751,23 @@ export function useLibrary() {
     background,
     connectLibrary,
     openSettings: () => PhotoLibrary.openSettings(),
+    allowFullAccess,
     unlock: async (code: string) => {
       const ok = await unlock(code);
-      if (ok) setLocked(false);
+      if (ok) {
+        setLocked(false);
+        setPaywall(null);
+      }
       return ok;
     },
+    /** The phone app sells subscriptions (the server has them turned on). */
+    subscriptions,
+    plan,
+    /** Why sorting is paused for want of a subscription, if it is. */
+    paywall,
+    paywallHidden,
+    hidePaywall: setPaywallHidden,
+    refreshPlan,
     importPhotos,
     retry,
     move,
@@ -483,7 +775,10 @@ export function useLibrary() {
     remove,
     addToAlbum,
     markSeen,
-    rename: (categoryId: string, name: string) => commit(renameCategory(stateRef.current, categoryId, name, newId)),
+    keepAll,
+    /** Photos not yet checked for duplicates. */
+    unchecked,
+    rename,
   };
 }
 

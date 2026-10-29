@@ -17,7 +17,8 @@ const BANNED_NAMES = new Set([
   "other", "others", "misc", "miscellaneous", "uncategorized", "uncategorised", "unsorted",
   "unknown", "unclassified", "unidentified", "general", "generic", "various", "assorted",
   "random", "stuff", "things", "item", "items", "product", "products", "photo", "photos",
-  "image", "images", "picture", "pictures", "none", "na", "n a", "tbd", "todo", "to sort",
+  "image", "images", "picture", "pictures", "video", "videos", "clip", "clips", "video clips",
+  "recordings", "footage", "media", "none", "na", "n a", "tbd", "todo", "to sort",
   "everything else", "rest", "leftovers", "extras", "more", "new", "new category",
   "category", "default", "mixed", "personal", "business", "business expenses",
 ]);
@@ -31,6 +32,7 @@ const BANNED_WORDS = new Set([
 function words(name: string): string[] {
   return name
     .toLowerCase()
+    .replace(/['’]/g, "")
     .replace(/&/g, " and ")
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
@@ -80,46 +82,136 @@ function singular(word: string): string {
   return word;
 }
 
-/** Common alternate names, mapped to the canonical category name. Keys are match keys. */
-const SYNONYMS: Record<string, string> = {
-  tee: "Shirts", "t shirt": "Shirts", tshirt: "Shirts", top: "Shirts", polo: "Shirts",
-  "button up": "Shirts", "button down": "Shirts", jersey: "Shirts",
-  cap: "Hats", "baseball cap": "Hats", "snapback": "Hats", "trucker hat": "Hats", "bucket hat": "Hats",
-  "knit hat": "Beanies", "winter hat": "Beanies", toque: "Beanies",
-  cologne: "Fragrance", perfume: "Fragrance", fragrance: "Fragrance", "eau de parfum": "Fragrance",
-  "eau de toilette": "Fragrance", scent: "Fragrance",
-  purse: "Bags", handbag: "Bags", backpack: "Bags", tote: "Bags", "tote bag": "Bags",
-  "crossbody bag": "Bags", "duffel bag": "Bags", "messenger bag": "Bags",
-  "card case": "Card Holders", "card wallet": "Card Holders", cardholder: "Card Holders",
-  trouser: "Pants", jean: "Pants", jogger: "Pants", sweatpant: "Pants", chino: "Pants",
-  "short": "Shorts",
-  set: "Clothing Sets", "matching set": "Clothing Sets", tracksuit: "Clothing Sets", "outfit set": "Clothing Sets",
-  sock: "Socks",
-  toy: "Toys", "action figure": "Toys", "plush": "Toys", "plushie": "Toys",
-  receipt: "Receipts", "order confirmation": "Order Confirmations", "order receipt": "Order Confirmations",
-  invoice: "Invoices", bill: "Invoices",
-  "payment screen": "Payment Screens", "payment confirmation": "Payment Screens",
-  "payment screenshot": "Payment Screens",
-};
+/**
+ * Names that mean the same kind of thing. The first name of each group is the one a new
+ * category gets, and any category named after one of them takes in the whole group: if the
+ * person already has "Shoes", a photo the AI files as "Sneakers" goes there.
+ */
+const SYNONYM_GROUPS: string[][] = [
+  ["Shirts", "Tee", "T Shirt", "Tshirt", "Top", "Polo", "Button Up", "Button Down", "Jersey", "Blouse", "Tank Top",
+    "Long Sleeve", "Long Sleeve Shirt", "Graphic Tee", "Dress Shirt"],
+  ["Hats", "Cap", "Baseball Cap", "Snapback", "Fitted", "Fitted Hat", "Trucker Hat", "Trucker Cap", "Bucket Hat", "Dad Hat"],
+  ["Beanies", "Knit Hat", "Winter Hat", "Toque", "Knit Cap", "Skull Cap", "Beanie Hat"],
+  ["Fragrance", "Cologne", "Perfume", "Parfum", "Eau de Parfum", "Eau de Toilette", "Scent", "Fragrance Bottle"],
+  ["Bags", "Purse", "Handbag", "Backpack", "Tote", "Tote Bag", "Crossbody", "Crossbody Bag", "Duffel Bag", "Duffle Bag",
+    "Messenger Bag", "Shoulder Bag", "Clutch", "Satchel", "Fanny Pack", "Belt Bag", "Sling Bag"],
+  ["Wallets", "Billfold", "Bifold", "Bifold Wallet", "Trifold", "Trifold Wallet"],
+  ["Card Holders", "Card Case", "Card Wallet", "Card Sleeve"],
+  ["Pants", "Trouser", "Jean", "Jogger", "Sweatpant", "Chino", "Slack", "Cargo Pant"],
+  ["Shorts", "Short"],
+  ["Clothing Sets", "Set", "Matching Set", "Tracksuit", "Outfit Set", "Outfit", "Two Piece Set", "Sweatsuit"],
+  ["Socks", "Sock Pair", "Crew Sock", "Ankle Sock"],
+  ["Belts", "Belt Buckle", "Waist Belt"],
+  ["Toys", "Action Figure", "Plush", "Plushie", "Stuffed Animal", "Figurine", "Collectible Figure"],
+  ["Sneakers", "Shoe", "Footwear", "Trainer", "Kick", "Running Shoe", "Athletic Shoe", "Tennis Shoe"],
+  ["Sunglasses", "Shade", "Sunnies", "Sunglass"],
+  ["Jewelry", "Jewellery", "Jewel"],
+  ["Phone Cases", "Phone Cover", "iPhone Case", "Cell Phone Case"],
+  ["Hoodies", "Hoody", "Hooded Sweatshirt", "Zip Up Hoodie", "Pullover Hoodie"],
+  ["Jackets", "Coat", "Outerwear", "Windbreaker"],
+  ["Watches", "Wristwatch", "Timepiece"],
+  ["Receipts", "Receipt Photo", "Store Receipt", "Purchase Receipt", "Paper Receipt"],
+  ["Order Confirmations", "Order Receipt", "Order Confirmation Email", "Order Summary", "Order Details"],
+  ["Invoices", "Bill"],
+  ["Payment Screens", "Payment Confirmation", "Payment Screenshot", "Payment", "Payment Receipt", "Checkout Screen", "Checkout"],
+  ["Shipping Labels", "Shipping Label Receipt", "Postage Label", "Postage"],
+  ["Pets", "Pet", "Pet Photo"],
+  ["Food", "Meal", "Dish", "Food Photo"],
+  ["Memes", "Meme", "Funny Picture"],
+];
 
-/** Key used to decide whether two names mean the same category ("Phone Case" == "phone cases"). */
+/**
+ * Words that don't change what kind of item something is: who it's for, its condition, or
+ * that it's a photo of it. "Men's Vintage Hats" and "Hat Photos" are both just Hats.
+ */
+const FILLER_WORDS = new Set([
+  "men", "man", "women", "woman", "ladie", "kid", "child", "children", "boy", "girl", "babie", "unisex", "adult",
+  "vintage", "designer", "luxury", "used", "pre", "owned", "preowned", "new", "authentic", "branded", "brand",
+  "item", "product", "photo", "picture", "pic", "image", "shot", "screenshot",
+]);
+
+/**
+ * One-word synonyms too loose to count when they end a longer name: "Lego Sets" are not
+ * Clothing Sets and "Bottle Caps" are not Hats.
+ */
+const LOOSE_TAILS = new Set(["set", "cap", "top", "tee", "bill", "scent", "outfit", "payment", "checkout", "dish", "shade", "kick", "jean", "slack", "fitted"]);
+
+/** Words of a name reduced to a comparable form: lower case, singular, filler removed. */
+function matchWords(name: string): string[] {
+  const all = words(name).map(singular);
+  const kept = all.filter((w) => !FILLER_WORDS.has(w));
+  return kept.length ? kept : all;
+}
+
+const keyOf = (ws: string[]) => ws.join("");
+
+// Match key of every synonym -> match key of its group's first name.
+const SYNONYM_KEYS = new Map<string, string>();
+const CANONICAL_NAMES = new Map<string, string>();
+for (const [first, ...rest] of SYNONYM_GROUPS) {
+  const target = keyOf(matchWords(first));
+  CANONICAL_NAMES.set(target, first);
+  for (const name of [first, ...rest]) SYNONYM_KEYS.set(keyOf(matchWords(name)), target);
+}
+
+const conceptOf = (ws: string[]) => SYNONYM_KEYS.get(keyOf(ws)) ?? keyOf(ws);
+
+/**
+ * Key used to decide whether two names mean the same category. Case, plurals, spacing
+ * ("Card Holder" / "Cardholders"), filler words and known synonyms ("Tee" / "Shirts") all
+ * reduce to the same key.
+ */
 export function categoryMatchKey(name: string): string {
-  return words(name).map(singular).join(" ");
+  return conceptOf(matchWords(name));
 }
 
 function canonicalName(name: string): string {
-  const key = categoryMatchKey(name);
-  return SYNONYMS[key] ?? tidyCategoryName(name);
+  return CANONICAL_NAMES.get(categoryMatchKey(name)) ?? tidyCategoryName(name);
 }
 
-/** Finds a category in `section` that means the same thing as `name`. */
-export function findMatchingCategory(
-  categories: Category[],
+/** Splits "Hats & Caps" or "Socks / Underwear" into its parts. */
+function nameParts(name: string): string[] {
+  return name.split(/\s+(?:and|or|&)\s+|\s*[/,+]\s*/i).map((p) => p.trim()).filter(Boolean);
+}
+
+/**
+ * Finds a category in `section` that means the same thing as `name`: the same name in other
+ * words, or, for products and business records, a narrower kind of it ("Basketball Shorts"
+ * goes in Shorts, "Gas Receipts" in Receipts). A name joining two kinds ("Hats & Caps") goes
+ * to the first part that already has a category.
+ */
+export function findMatchingCategory<C extends { section: Section; name: string }>(
+  categories: C[],
   section: Section,
   name: string,
-): Category | undefined {
-  const key = categoryMatchKey(canonicalName(name));
-  return categories.find((c) => c.section === section && categoryMatchKey(c.name) === key);
+): C | undefined {
+  const inSection = categories.filter((c) => c.section === section);
+  const keys = new Map<string, C>();
+  for (const c of inSection) {
+    const k = categoryMatchKey(c.name);
+    if (!keys.has(k)) keys.set(k, c);
+  }
+  const match = (n: string): C | undefined => {
+    const ws = matchWords(n);
+    const exact = keys.get(conceptOf(ws));
+    if (exact || section === "personal") return exact;
+    for (let i = 1; i < ws.length; i++) {
+      const tail = ws.slice(i);
+      if (tail.length === 1 && LOOSE_TAILS.has(tail[0])) continue;
+      const found = keys.get(conceptOf(tail));
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const whole = match(name);
+  if (whole) return whole;
+  const parts = nameParts(name);
+  if (parts.length < 2) return undefined;
+  for (const part of parts) {
+    const found = match(part);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 export interface ResolvedCategory {

@@ -54,6 +54,7 @@ import org.json.JSONException;
     name = "PhotoLibrary",
     permissions = {
         @Permission(strings = { Manifest.permission.READ_MEDIA_IMAGES }, alias = PhotoLibraryPlugin.PHOTOS),
+        @Permission(strings = { Manifest.permission.READ_MEDIA_VIDEO }, alias = PhotoLibraryPlugin.VIDEOS),
         @Permission(strings = { Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED }, alias = PhotoLibraryPlugin.SELECTED),
         @Permission(strings = { Manifest.permission.READ_EXTERNAL_STORAGE }, alias = PhotoLibraryPlugin.STORAGE),
         // Shows the "Sorting photos" progress notification while sorting carries on after the app is closed.
@@ -63,6 +64,7 @@ import org.json.JSONException;
 public class PhotoLibraryPlugin extends Plugin {
 
     static final String PHOTOS = "photos";
+    static final String VIDEOS = "videos";
     static final String SELECTED = "selected";
     static final String STORAGE = "storage";
     static final String NOTIFICATIONS = "notifications";
@@ -88,6 +90,7 @@ public class PhotoLibraryPlugin extends Plugin {
             }
         };
         getContext().getContentResolver().registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, libraryObserver);
+        getContext().getContentResolver().registerContentObserver(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, libraryObserver);
         deleteLauncher = getActivity()
             .registerForActivityResult(new ActivityResultContracts.StartIntentSenderForResult(), (result) -> {
                 if (pendingDelete == null) return;
@@ -109,9 +112,15 @@ public class PhotoLibraryPlugin extends Plugin {
         return s == PermissionState.DENIED ? "denied" : "prompt";
     }
 
+    /** Whether full access covers videos too. Before Android 13 one permission covers both. */
+    private boolean videosAllowed() {
+        return Build.VERSION.SDK_INT < 33 || getPermissionState(VIDEOS) == PermissionState.GRANTED;
+    }
+
     private void resolveStatus(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("status", status());
+        ret.put("videos", videosAllowed());
         call.resolve(ret);
     }
 
@@ -123,9 +132,9 @@ public class PhotoLibraryPlugin extends Plugin {
     @PluginMethod
     public void requestPermission(PluginCall call) {
         if (Build.VERSION.SDK_INT >= 34) {
-            requestPermissionForAliases(new String[] { PHOTOS, SELECTED, NOTIFICATIONS }, call, "permissionCallback");
+            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS, SELECTED, NOTIFICATIONS }, call, "permissionCallback");
         } else if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissionForAliases(new String[] { PHOTOS, NOTIFICATIONS }, call, "permissionCallback");
+            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS, NOTIFICATIONS }, call, "permissionCallback");
         } else {
             requestPermissionForAlias(STORAGE, call, "permissionCallback");
         }
@@ -144,26 +153,42 @@ public class PhotoLibraryPlugin extends Plugin {
         call.resolve();
     }
 
-    /** Pages through every image in the library, oldest first. */
+    /**
+     * An id for this phone that stays the same when OrganizeIt is uninstalled and installed
+     * again (Android keeps it per app signing key), so the free photos and the subscription
+     * follow the phone rather than the install.
+     */
+    @PluginMethod
+    public void deviceId(PluginCall call) {
+        String id = Settings.Secure.getString(getContext().getContentResolver(), Settings.Secure.ANDROID_ID);
+        JSObject ret = new JSObject();
+        ret.put("id", id == null || id.isEmpty() ? "" : "android-" + id);
+        call.resolve(ret);
+    }
+
+    /**
+     * Pages through every photo, then every video, in the library, oldest first within each.
+     * The app sorts by date itself, so the two tables are simply read one after the other.
+     */
     @PluginMethod
     public void list(PluginCall call) {
         int offset = Math.max(0, call.getInt("offset", 0));
         int limit = Math.max(1, Math.min(call.getInt("limit", 500), 2000));
         executor.execute(() -> {
-            String order = MediaStore.Images.Media.DATE_ADDED + " ASC, " + MediaStore.Images.Media._ID + " ASC";
+            String order = MediaStore.MediaColumns.DATE_ADDED + " ASC, " + MediaStore.MediaColumns._ID + " ASC";
+            android.content.ContentResolver resolver = getContext().getContentResolver();
             try (
-                Cursor c = getContext()
-                    .getContentResolver()
-                    .query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), MediaAssets.notAlbumCopy(), MediaAssets.albumArgs(), order)
+                Cursor images = resolver.query(MediaAssets.table(false), MediaAssets.projection(false), MediaAssets.notAlbumCopy(), MediaAssets.albumArgs(), order);
+                Cursor videos = resolver.query(MediaAssets.table(true), MediaAssets.projection(true), MediaAssets.notAlbumCopy(), MediaAssets.albumArgs(), order)
             ) {
-                JSArray assets = new JSArray();
-                int total = c == null ? 0 : c.getCount();
+                int imageCount = images == null ? 0 : images.getCount();
+                int total = imageCount + (videos == null ? 0 : videos.getCount());
                 int end = Math.min(total, offset + limit);
-                if (c != null && offset < total && c.moveToPosition(offset)) {
-                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
-                    do {
-                        assets.put(MediaAssets.describe(c, cols));
-                    } while (c.getPosition() < end - 1 && c.moveToNext());
+                JSArray assets = new JSArray();
+                for (int i = offset; i < end; i++) {
+                    Cursor c = i < imageCount ? images : videos;
+                    if (c == null || !c.moveToPosition(i < imageCount ? i : i - imageCount)) break;
+                    assets.put(MediaAssets.describe(c, new MediaAssets.Columns(c)));
                 }
                 JSObject ret = new JSObject();
                 ret.put("assets", assets);
@@ -180,7 +205,10 @@ public class PhotoLibraryPlugin extends Plugin {
         return MediaAssets.uriFor(id);
     }
 
-    /** Returns a JPEG copy of a photo scaled so its longest side is at most maxSide. */
+    /**
+     * Returns a JPEG copy of a photo scaled so its longest side is at most maxSide. For a video
+     * it is the opening frame or, with frames, six frames from across it in a grid.
+     */
     @PluginMethod
     public void getImage(PluginCall call) {
         String id = call.getString("id");
@@ -190,9 +218,10 @@ public class PhotoLibraryPlugin extends Plugin {
         }
         int maxSide = Math.max(64, call.getInt("maxSide", 1024));
         int quality = (int) Math.round(call.getDouble("quality", 0.8) * 100);
+        boolean frames = Boolean.TRUE.equals(call.getBoolean("frames", false));
         executor.execute(() -> {
             try {
-                Bitmap bitmap = decode(uriFor(id), maxSide);
+                Bitmap bitmap = MediaAssets.still(getContext(), id, maxSide, frames);
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out);
                 JSObject ret = new JSObject();
@@ -207,8 +236,17 @@ public class PhotoLibraryPlugin extends Plugin {
         });
     }
 
-    private Bitmap decode(Uri uri, int maxSide) throws Exception {
-        return MediaAssets.decode(getContext().getContentResolver(), uri, maxSide);
+    /** A content URI the app's web view can play the video from. */
+    @PluginMethod
+    public void getVideo(PluginCall call) {
+        String id = call.getString("id");
+        if (id == null || !MediaAssets.isVideo(id)) {
+            call.reject("That video is no longer on this phone", "NOT_FOUND");
+            return;
+        }
+        JSObject ret = new JSObject();
+        ret.put("path", uriFor(id).toString());
+        call.resolve(ret);
     }
 
     /**
@@ -295,7 +333,7 @@ public class PhotoLibraryPlugin extends Plugin {
                     try (
                         Cursor c = resolver.query(
                             source,
-                            new String[] { MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.MIME_TYPE, MediaStore.Images.Media.DATE_TAKEN },
+                            new String[] { MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_TAKEN },
                             null,
                             null,
                             null
@@ -307,8 +345,9 @@ public class PhotoLibraryPlugin extends Plugin {
                         taken = c.getLong(2);
                     }
                     found++;
-                    if (inFolder(resolver, folder, name)) continue;
-                    copy(resolver, source, folder, name, mime, taken);
+                    Uri table = MediaAssets.table(MediaAssets.isVideo(id));
+                    if (inFolder(resolver, table, folder, name)) continue;
+                    copy(resolver, table, source, folder, name, mime, taken);
                     added++;
                 }
             } catch (Exception e) {
@@ -333,27 +372,31 @@ public class PhotoLibraryPlugin extends Plugin {
     }
 
     private static boolean folderHasPhotos(ContentResolver resolver, String folder) {
-        String where = MediaStore.Images.Media.RELATIVE_PATH + " = ?";
-        try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, new String[] { MediaStore.Images.Media._ID }, where, new String[] { folder }, null)) {
+        String where = MediaStore.MediaColumns.RELATIVE_PATH + " = ?";
+        for (boolean video : new boolean[] { false, true }) {
+            try (Cursor c = resolver.query(MediaAssets.table(video), new String[] { MediaStore.MediaColumns._ID }, where, new String[] { folder }, null)) {
+                if (c != null && c.getCount() > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean inFolder(ContentResolver resolver, Uri table, String folder, String name) {
+        String where = MediaStore.MediaColumns.RELATIVE_PATH + " = ? AND " + MediaStore.MediaColumns.DISPLAY_NAME + " = ?";
+        try (Cursor c = resolver.query(table, new String[] { MediaStore.MediaColumns._ID }, where, new String[] { folder, name }, null)) {
             return c != null && c.getCount() > 0;
         }
     }
 
-    private static boolean inFolder(ContentResolver resolver, String folder, String name) {
-        String where = MediaStore.Images.Media.RELATIVE_PATH + " = ? AND " + MediaStore.Images.Media.DISPLAY_NAME + " = ?";
-        try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, new String[] { MediaStore.Images.Media._ID }, where, new String[] { folder, name }, null)) {
-            return c != null && c.getCount() > 0;
-        }
-    }
-
-    private static void copy(ContentResolver resolver, Uri source, String folder, String name, String mime, long taken) throws Exception {
+    /** Copies a photo or video (into `table`, the images or videos table) in the album folder. */
+    private static void copy(ContentResolver resolver, Uri table, Uri source, String folder, String name, String mime, long taken) throws Exception {
         ContentValues values = new ContentValues();
         values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
         values.put(MediaStore.Images.Media.MIME_TYPE, mime);
         values.put(MediaStore.Images.Media.RELATIVE_PATH, folder);
         if (taken > 0) values.put(MediaStore.Images.Media.DATE_TAKEN, taken); // keeps the copy at the photo's own date
         values.put(MediaStore.Images.Media.IS_PENDING, 1);
-        Uri target = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+        Uri target = resolver.insert(table, values);
         if (target == null) throw new Exception("Could not create the album copy");
         try (InputStream in = resolver.openInputStream(source); OutputStream out = resolver.openOutputStream(target)) {
             if (in == null || out == null) throw new Exception("Could not copy the photo");
@@ -374,8 +417,8 @@ public class PhotoLibraryPlugin extends Plugin {
      */
     private Uri shareableCopy(String id) throws Exception {
         Uri source = uriFor(id);
-        String name = "Photo.jpg";
-        String[] cols = { MediaStore.Images.Media.DISPLAY_NAME };
+        String name = MediaAssets.isVideo(id) ? "Video.mp4" : "Photo.jpg";
+        String[] cols = { MediaStore.MediaColumns.DISPLAY_NAME };
         try (Cursor c = getContext().getContentResolver().query(source, cols, null, null, null)) {
             if (c == null || !c.moveToFirst()) throw new Exception("That photo is no longer on this phone");
             String n = c.getString(0);

@@ -30,11 +30,40 @@ process on `PORT` (default 8787).
 3. Deploy. Open the `…onrender.com` address on your phone, enter the passcode once, and use
    Share → **Add to Home Screen** to get an app icon.
 
-The passcode keeps strangers from using your Anthropic credits, and each IP is capped at
-`SORTS_PER_HOUR` photos per hour (default 10,000). `CLASSIFY_MODEL` picks the Claude model
-(default `claude-opus-5-5`); `claude-haiku-5-5` is much faster and cheaper, at some cost in
-accuracy. On the free plan the server sleeps after
-15 minutes idle, so the first sort after a break takes about a minute to start.
+The passcode keeps strangers from using your Anthropic credits, and each subscriber (or IP,
+without one) is capped at `SORTS_PER_HOUR` photos per hour (default 10,000). On the free plan
+the server sleeps after 15 minutes idle, so the first sort after a break takes about a minute
+to start; for paying customers use a paid instance (Starter or above), which stays awake.
+
+Sorting runs in two passes to keep the AI bill down: every photo goes to `CLASSIFY_MODEL`
+(default `claude-haiku-5-5`, fast and cheap), and only photos it is less than
+`CLASSIFY_ESCALATE_BELOW` sure about (default 0.75) or can't place are asked again of
+`CLASSIFY_ESCALATE_MODEL` (default `claude-opus-5-5`). `CLASSIFY_ESCALATE_MODEL=none` turns
+the second pass off.
+
+### Subscriptions
+
+The phone app sells a monthly subscription through the App Store and Google Play, with a
+discounted first month, via [RevenueCat](https://www.revenuecat.com). Each phone gets
+`FREE_SORT_LIMIT` photos sorted free first (default 100), the discounted month sorts up to
+`INTRO_SORT_LIMIT` photos (default 2,000; the rest wait for the first full-price month), and
+full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
+
+- Server: `REVENUECAT_SECRET_KEY` (RevenueCat → Project settings → API keys → secret key)
+  turns subscriptions on. `DATABASE_URL` (any Postgres, e.g. a Render Postgres database)
+  keeps the photo counts through restarts; without it they live in memory.
+  `REVENUECAT_ENTITLEMENT` is the entitlement id (default `organizeit_pro`).
+- App builds: `VITE_REVENUECAT_IOS_KEY` and `VITE_REVENUECAT_ANDROID_KEY` in `.env.app`
+  (RevenueCat's public app-specific keys, safe to ship) let the app show the store's
+  purchase sheet.
+- Each phone is known by an id that survives reinstalling the app (a keychain entry on
+  iPhone, `ANDROID_ID` on Android), which is also its RevenueCat user id. "Restore purchases"
+  moves a subscription to a new phone.
+- The passcode still sorts without a subscription (the website, and the owner via
+  "Have a passcode?" on the subscribe screen). After 10 wrong passcodes in an hour an address
+  is shut out for the rest of the hour. Each passcode belongs to the first phone that unlocks
+  with it and works nowhere else (the claim is kept, hashed, in the `passcode_owners` table).
+  For another phone, add another passcode to `APP_PASSCODE`, comma-separated.
 
 `npm test` runs the unit and API tests (no API key needed; the AI is faked).
 
@@ -59,8 +88,10 @@ accuracy. On the free plan the server sleeps after
    (to any category or a new one), bulk delete, rename or merge categories. Categories the AI
    created are removed automatically once they're empty; the starting ones stay.
 
-Photos waiting to be sorted are shown in a "Sorting…" panel. When the AI isn't confident
-(below 60%), or sorting fails, the photo goes to **To review** instead of being filed. There
+Photos waiting to be sorted are shown in a "Sorting…" panel. The AI files nearly everything
+itself: close calls get a second opinion from the stronger model and are then filed under the
+best answer (or a new specific category). Only photos it can't make out at all (below 30%), or
+that fail to sort, go to **To review** instead of being filed. There
 you tap one photo to pick its category (the AI's guess is a one-tap answer), or select
 several and send them to the same place, existing or new. To review is a to-do list, not a
 category: every photo leaves it by being filed into a real, specific category.
@@ -116,8 +147,12 @@ was unsure about still go to To review and the core rule still holds.
   while the app is open. Close the app and sorting carries on, with progress shown by iOS,
   which can be stopped from there. While the app is open it sorts by itself and the task only
   follows along. Once everything is sorted it keeps watching for new photos for 5 more
-  minutes before ending.
-- **Any iPhone:** about 30 seconds of extra time right after closing, plus background refresh
+  minutes before ending (only while charging).
+- **Any iPhone:** in the 30 seconds or so iOS gives a closed app, the waiting photos (up to
+  100 on battery, 200 while charging) are prepared and handed to iOS's background transfer
+  service (`BackgroundUploads.swift`). iOS keeps sending them to `/api/classify` while the app
+  is suspended, then wakes it briefly to keep the answers and, while charging, hand over the
+  next 200. Opening the app takes back whatever is still waiting. Plus background refresh
   and processing tasks that iOS runs when it chooses (often overnight while charging) to sort
   photos taken since. iOS never runs an app the moment a photo is taken, and runs nothing for
   an app that was swiped away in the app switcher until it is opened again. Background App
@@ -126,6 +161,14 @@ was unsure about still go to To review and the core rule still holds.
   allow notifications along with Photos) keeps sorting after the app is closed; new photos
   are sorted a few seconds after they are added, and hourly
   as a fallback (Android may delay these to save battery).
+
+- **Saving battery (both phones):** on battery, a background run sorts at most 100 photos,
+  gives up on an unreachable server after 3 minutes (15 while charging), and on iPhone
+  doesn't download photos kept only in iCloud. In Low Power Mode / Battery Saver, or under
+  20% and not plugged in, it doesn't sort at all. The big catch-up (iOS processing task,
+  Android hourly job) only runs while charging, the iOS refresh asks for about one wake-up an
+  hour, and the 5-minute watch after finishing only happens while charging. Opening the app
+  always sorts everything, as before.
 
 `npm run build:app` builds the web code against the API in `.env.app` and syncs it into
 both native projects.
@@ -156,8 +199,8 @@ both native projects.
   registered and have an app record in App Store Connect. Builds appear in the TestFlight
   app for internal testers after Apple finishes processing (usually 10 to 30 minutes).
 
-`.env.app` sets `VITE_SORT_LIMIT` so test builds only sort the newest photos (remove it to
-sort the whole library).
+The app sorts the whole library. For a test build that only sorts the newest photos, add
+`VITE_SORT_LIMIT=500` (or any number) to `.env.app`.
 
 ## Limits of the web version
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatDuration } from "../core/storage";
 import type { Photo } from "../core/types";
 import { fullImage, thumbnail } from "../lib/media";
 
@@ -41,5 +42,15 @@ export function forgetImages(ids: string[]) {
 
 export function Thumb({ photo, alt }: { photo: Photo; alt: string }) {
   const url = useImageUrl(photo, "thumb");
-  return url ? <img src={url} alt={alt} loading="lazy" draggable={false} /> : <div className="thumb-placeholder" />;
+  const image = url ? <img src={url} alt={alt} loading="lazy" draggable={false} /> : <div className="thumb-placeholder" />;
+  if (!photo.isVideo) return image;
+  return (
+    <>
+      {image}
+      <span className="video-badge" aria-label="Video">
+        <svg viewBox="0 0 24 24" aria-hidden><path d="M8 5.5v13l11-6.5Z" fill="currentColor" /></svg>
+        {photo.durationMs ? <span className="video-length">{formatDuration(photo.durationMs)}</span> : null}
+      </span>
+    </>
+  );
 }

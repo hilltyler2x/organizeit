@@ -37,13 +37,36 @@ async function post(app: ReturnType<typeof createApp>, body: object, headers: Re
 const req = { image: "aGVsbG8=", mediaType: "image/jpeg", fileName: "IMG_1.jpg", width: 1170, height: 2532, categories: [{ section: "products", name: "Bags" }] };
 
 describe("POST /api/classify", () => {
+  it("answers with the existing category when the AI names a look-alike", async () => {
+    const { client, calls } = fakeClient([{ section: "products", category: "Shoes", label: "Nike Dunk Low", confidence: 0.9 }]);
+    const cats = [{ section: "products", name: "Bags" }, { section: "products", name: "Sneakers" }, { section: "products", name: "Sneaker" }];
+    const r = await post(createApp(client), { ...req, categories: cats });
+    expect(r.body.category).toBe("Sneakers");
+    // Look-alikes the phone still lists are shown to the AI once.
+    const prompt = calls[0].messages[0].content.find((b: any) => b.type === "text").text;
+    expect(prompt).toContain("products: Bags, Sneakers\n");
+    expect(calls[0].system).toContain("Never make a new category that means the same");
+  });
+
   it("returns the classification", async () => {
     const { client, calls } = fakeClient([{ section: "business", category: "Receipts", label: "Target receipt", confidence: 0.93 }]);
     const r = await post(createApp(client), req);
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ section: "business", category: "Receipts", label: "Target receipt", confidence: 0.93 });
-    expect(calls[0].model).toBe("claude-opus-5-5");
+    expect(calls[0].model).toBe("claude-haiku-5-5");
     expect(calls[0].output_config.format.type).toBe("json_schema");
+  });
+
+  it("asks the more capable model again when the first answer is unsure", async () => {
+    const { client, calls } = fakeClient([
+      { section: "products", category: "Bags", label: "maybe a bag", confidence: 0.5 },
+      { section: "products", category: "Wallets", label: "leather wallet", confidence: 0.9 },
+    ]);
+    const r = await post(createApp(client), req);
+    expect(r.body).toMatchObject({ category: "Wallets", confidence: 0.9 });
+    expect(calls.map((c) => c.model)).toEqual(["claude-haiku-5-5", "claude-opus-5-5"]);
+    expect(calls[1].fallbacks).toBe("default");
+    expect(calls[0].fallbacks).toBeUndefined();
   });
 
   it("re-asks once when the AI answers with a catch-all", async () => {
@@ -162,12 +185,16 @@ describe("POST /api/classify-batch", () => {
           { photo: 3, section: "personal", category: "Pets", label: "dog", confidence: 0.4 },
         ],
       },
+      { section: "personal", category: "Pets", label: "dog", confidence: 0.5 },
     ]);
     const r = await post(createApp(client), batch(3), {}, "/api/classify-batch");
     expect(r.status).toBe(200);
     expect(r.body.results.map((x: any) => x.category)).toEqual(["Receipts", "Bags", "Pets"]);
-    expect(r.body.results[2].confidence).toBe(0.4);
-    expect(calls).toHaveLength(1);
+    expect(r.body.results[2].confidence).toBe(0.5);
+    // Only the unsure photo goes to the second model.
+    expect(calls).toHaveLength(2);
+    expect(calls[1].model).toBe("claude-opus-5-5");
+    expect(calls[1].messages[0].content.filter((b: any) => b.type === "image")).toHaveLength(1);
     expect(calls[0].messages[0].content.filter((b: any) => b.type === "image")).toHaveLength(3);
     expect(calls[0].output_config.format.schema.required).toEqual(["photos"]);
   });

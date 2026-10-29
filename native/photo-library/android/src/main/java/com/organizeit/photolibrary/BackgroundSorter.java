@@ -6,7 +6,9 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.os.BatteryManager;
 import android.os.Build;
+import android.os.PowerManager;
 import android.provider.MediaStore;
 import android.util.Base64;
 import androidx.core.content.ContextCompat;
@@ -44,7 +46,35 @@ final class BackgroundSorter {
         /** Can't sort right now: no photo access, wrong passcode, no AI key, or the server stayed unreachable. */
         BLOCKED,
         /** Another run is already sorting. */
-        BUSY
+        BUSY,
+        /** Stopped to save battery; carries on once the phone charges. */
+        PAUSED
+    }
+
+    /** What the battery allows background sorting to do right now. */
+    static final class Power {
+
+        /** Most photos a background run sorts on battery; the rest wait for the phone to charge. */
+        static final int BATTERY_LIMIT = 100;
+
+        final boolean charging;
+        /** 0-100, or -1 when Android doesn't say. */
+        final int level;
+        final boolean saver;
+
+        Power(Context context) {
+            BatteryManager battery = (BatteryManager) context.getSystemService(Context.BATTERY_SERVICE);
+            PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            charging = battery != null && battery.isCharging();
+            int capacity = battery == null ? Integer.MIN_VALUE : battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            level = capacity == Integer.MIN_VALUE ? -1 : capacity;
+            saver = pm != null && pm.isPowerSaveMode();
+        }
+
+        /** Battery Saver, or under 20%, and not plugged in: background sorting waits. */
+        boolean shouldPause() {
+            return !charging && (saver || (level >= 0 && level < 20));
+        }
     }
 
     interface StopCheck {
@@ -61,7 +91,7 @@ final class BackgroundSorter {
     private static final AtomicBoolean running = new AtomicBoolean(false);
     private static final int BATCH = 3;
     /** Same threshold as REVIEW_BELOW in src/core/library.ts. */
-    private static final double REVIEW_BELOW = 0.6;
+    private static final double REVIEW_BELOW = 0.3;
 
     private final Context context;
     private final BackgroundSortStore store;
@@ -104,7 +134,7 @@ final class BackgroundSorter {
         RETRY,
         /** No connection, or the server is asleep. */
         OFFLINE,
-        /** Wrong passcode or no AI key: retrying won't help. */
+        /** Wrong passcode, no subscription or no AI key: retrying won't help. */
         PERMANENT
     }
 
@@ -142,6 +172,15 @@ final class BackgroundSorter {
             long pause = 0;
             long waitedSince = 0;
             while (!stop.shouldStop()) {
+                Power power = new Power(context);
+                if (power.shouldPause()) {
+                    ending = "Paused to save battery (" + (power.saver ? "Battery Saver" : "under 20%") + "). Sorting carries on when the phone charges or you open OrganizeIt.";
+                    return Outcome.PAUSED;
+                }
+                if (!power.charging && sorted >= Power.BATTERY_LIMIT) {
+                    ending = "The rest will be sorted while the phone charges, or when you open OrganizeIt.";
+                    return Outcome.PAUSED;
+                }
                 // Re-read each round: the app may have sent a newer snapshot.
                 JSONObject config = store.config();
                 if (config == null) return Outcome.BLOCKED;
@@ -189,17 +228,19 @@ final class BackgroundSorter {
                     }
                 }
                 if (problem == Answer.PERMANENT) {
-                    ending = "Stopped: the server turned the photos down (passcode or AI key). Open OrganizeIt to fix it.";
+                    ending = "Stopped: the server turned the photos down (subscription, passcode or AI key). Open OrganizeIt to see why.";
                     return Outcome.BLOCKED;
                 }
                 if (problem != null) {
                     // Give the server (which can take a minute to wake) or the network time to come back.
+                    // On battery, a few minutes of waiting with the radio on is all it's worth.
                     long now = System.currentTimeMillis();
                     if (waitedSince == 0) waitedSince = now;
-                    if (now - waitedSince > 15 * 60_000L) {
-                        ending = (problem == Answer.OFFLINE
-                            ? "Stopped: couldn't reach the sorting server for 15 minutes."
-                            : "Stopped: the sorting server stayed busy for 15 minutes.");
+                    int minutes = power.charging ? 15 : 3;
+                    if (now - waitedSince > minutes * 60_000L) {
+                        ending = problem == Answer.OFFLINE
+                            ? "Stopped: couldn't reach the sorting server for " + minutes + " minutes."
+                            : "Stopped: the sorting server stayed busy for " + minutes + " minutes.";
                         return Outcome.BLOCKED;
                     }
                     pause = Math.min(Math.max(pause * 2, 5), 60);
@@ -215,7 +256,7 @@ final class BackgroundSorter {
         } finally {
             pool.shutdownNow();
             running.set(false);
-            String done = sorted == 0 ? null : "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background.";
+            String done = sorted > 0 ? "Sorted " + sorted + " photo" + (sorted == 1 ? "" : "s") + " in the background." : null;
             if (done != null || ending != null) note(context, done == null ? ending : ending == null ? done : done + " " + ending);
         }
     }
@@ -252,14 +293,19 @@ final class BackgroundSorter {
         }
         if (!queued.isEmpty()) {
             List<String> wanted = queued.subList(0, Math.min(queued.size(), BATCH * 2));
-            StringBuilder where = new StringBuilder(MediaStore.Images.Media._ID + " IN (");
-            for (int i = 0; i < wanted.size(); i++) where.append(i == 0 ? "?" : ",?");
-            where.append(")");
             List<JSONObject> found = new ArrayList<>();
-            try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), where.toString(), wanted.toArray(new String[0]), null)) {
-                if (c != null && c.moveToFirst()) {
-                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
-                    do found.add(MediaAssets.describe(c, cols)); while (c.moveToNext());
+            for (boolean video : new boolean[] { false, true }) {
+                List<String> rows = new ArrayList<>();
+                for (String id : wanted) if (MediaAssets.isVideo(id) == video) rows.add(MediaAssets.rowId(id));
+                if (rows.isEmpty()) continue;
+                StringBuilder where = new StringBuilder(MediaStore.MediaColumns._ID + " IN (");
+                for (int i = 0; i < rows.size(); i++) where.append(i == 0 ? "?" : ",?");
+                where.append(")");
+                try (Cursor c = resolver.query(MediaAssets.table(video), MediaAssets.projection(video), where.toString(), rows.toArray(new String[0]), null)) {
+                    if (c != null && c.moveToFirst()) {
+                        MediaAssets.Columns cols = new MediaAssets.Columns(c);
+                        do found.add(MediaAssets.describe(c, cols)); while (c.moveToNext());
+                    }
                 }
             }
             // Keep the app's order (newest first); photos deleted since are dropped.
@@ -272,18 +318,20 @@ final class BackgroundSorter {
         }
         long knownUpTo = (long) config.optDouble("knownUpTo", 0);
         int fresh = 0;
-        String where = "(" + MediaStore.Images.Media.DATE_TAKEN + " > ? OR " + MediaStore.Images.Media.DATE_ADDED + " > ?) AND " + MediaAssets.notAlbumCopy();
+        String where = "(" + MediaStore.MediaColumns.DATE_TAKEN + " > ? OR " + MediaStore.MediaColumns.DATE_ADDED + " > ?) AND " + MediaAssets.notAlbumCopy();
         String[] args = MediaAssets.concat(new String[] { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) }, MediaAssets.albumArgs());
-        String order = MediaStore.Images.Media.DATE_ADDED + " DESC";
-        try (Cursor c = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaAssets.projection(), where, args, order)) {
-            if (c != null && c.moveToFirst()) {
-                MediaAssets.Columns cols = new MediaAssets.Columns(c);
-                do {
-                    String id = String.valueOf(c.getLong(cols.id));
-                    if (skip.contains(id) || queuedSet.contains(id)) continue;
-                    fresh++;
-                    if (batch.assets.size() < BATCH) batch.assets.add(MediaAssets.describe(c, cols));
-                } while (c.moveToNext() && fresh < 500);
+        String order = MediaStore.MediaColumns.DATE_ADDED + " DESC";
+        for (boolean video : new boolean[] { false, true }) {
+            try (Cursor c = resolver.query(MediaAssets.table(video), MediaAssets.projection(video), where, args, order)) {
+                if (c != null && c.moveToFirst()) {
+                    MediaAssets.Columns cols = new MediaAssets.Columns(c);
+                    do {
+                        String id = (video ? MediaAssets.VIDEO_PREFIX : "") + c.getLong(cols.id);
+                        if (skip.contains(id) || queuedSet.contains(id)) continue;
+                        fresh++;
+                        if (batch.assets.size() < BATCH) batch.assets.add(MediaAssets.describe(c, cols));
+                    } while (c.moveToNext() && fresh < 500);
+                }
             }
         }
         batch.waiting = queued.size() + fresh;
@@ -293,7 +341,9 @@ final class BackgroundSorter {
     private Answer classify(JSONObject asset, JSONObject config, JSONArray categories, JSONArray learned) {
         String image;
         try {
-            Bitmap bitmap = MediaAssets.decode(context.getContentResolver(), MediaAssets.uriFor(asset.getString("id")), 768);
+            // A video is sent as six frames from across it in one larger grid image.
+            boolean video = MediaAssets.isVideo(asset.getString("id"));
+            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), video ? MediaAssets.SHEET_SIDE : 768, true);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
             bitmap.recycle();
@@ -311,6 +361,10 @@ final class BackgroundSorter {
             body.put("width", asset.optInt("width"));
             body.put("height", asset.optInt("height"));
             body.put("isScreenshot", asset.optBoolean("isScreenshot"));
+            if (asset.optBoolean("isVideo")) {
+                body.put("isVideo", true);
+                body.put("durationSec", Math.round(asset.optLong("durationMs") / 1000.0));
+            }
             body.put("categories", categories);
             body.put("lessons", config.optJSONArray("lessons") == null ? new JSONArray() : config.optJSONArray("lessons"));
             http = (HttpURLConnection) new URL(config.getString("apiUrl") + "/api/classify").openConnection();
@@ -320,11 +374,13 @@ final class BackgroundSorter {
             http.setDoOutput(true);
             http.setRequestProperty("content-type", "application/json");
             http.setRequestProperty("x-organizeit-passcode", config.optString("passcode"));
+            if (!config.optString("userId").isEmpty()) http.setRequestProperty("x-organizeit-user", config.optString("userId"));
             try (OutputStream os = http.getOutputStream()) {
                 os.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
             int code = http.getResponseCode();
-            if (code == 401 || code == 503) return Answer.PERMANENT; // wrong passcode, or the server has no working AI key
+            // Wrong passcode, no subscription (or this month's photos used up), or no working AI key.
+            if (code == 401 || code == 402 || code == 503) return Answer.PERMANENT;
             if (code == 429 || code >= 500) return Answer.RETRY;
             if (code != 200) return Answer.SKIP;
             ByteArrayOutputStream text = new ByteArrayOutputStream();

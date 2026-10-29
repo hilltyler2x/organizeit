@@ -19,23 +19,34 @@ export interface PhotoSource {
   canDeleteOriginals: boolean;
 }
 
-const ACCEPTED = /^image\/(jpeg|png|webp|gif|heic|heif)$/i;
+const ACCEPTED = /^(image\/(jpeg|png|webp|gif|heic|heif)|video\/(mp4|quicktime|webm|x-m4v|3gpp))$/i;
+const VIDEO_NAME = /\.(mp4|mov|m4v|webm|3gp)$/i;
 
 export function filesToPicked(files: Iterable<File>): PickedPhoto[] {
   return [...files]
-    .filter((f) => ACCEPTED.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(f.name))
-    .map((f) => ({ file: f, name: f.name, type: f.type || "image/jpeg", lastModified: f.lastModified, source: { kind: "file" as const } }));
+    .filter((f) => ACCEPTED.test(f.type) || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(f.name) || VIDEO_NAME.test(f.name))
+    .map((f) => ({
+      file: f,
+      name: f.name,
+      type: f.type || (VIDEO_NAME.test(f.name) ? "video/mp4" : "image/jpeg"),
+      lastModified: f.lastModified,
+      source: { kind: "file" as const },
+    }));
+}
+
+export function isVideoType(type: string): boolean {
+  return type.startsWith("video/");
 }
 
 export function browserPhotoSource(options: { folder?: boolean } = {}): PhotoSource {
   return {
-    label: options.folder ? "Add a folder" : "Add photos",
+    label: options.folder ? "Add a folder" : "Add photos and videos",
     canDeleteOriginals: false,
     pick: () =>
       new Promise((resolve) => {
         const input = document.createElement("input");
         input.type = "file";
-        input.accept = "image/*";
+        input.accept = "image/*,video/*";
         input.multiple = true;
         if (options.folder) input.setAttribute("webkitdirectory", "");
         input.onchange = () => resolve(filesToPicked(input.files ?? []));

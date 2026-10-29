@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
 import { BackLayer, useBack } from "./back";
+import { PhotoZoom } from "./PhotoZoom";
 import { Thumb } from "./Thumb";
+import { VideoPlayer } from "./VideoPlayer";
 
 export type MoveTarget = { categoryId: string } | { section: Section; name: string };
 
@@ -24,6 +27,16 @@ export function MoveDialog(props: {
   useBack(true, props.onClose, BackLayer.dialog);
   const [section, setSection] = useState<Section>(props.defaultSection);
   const [name, setName] = useState("");
+  const [zoomAt, setZoomAt] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // Always open at the top so the question is the first thing seen, even if a video loading in nudges the scroll.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    const id = requestAnimationFrame(() => (el.scrollTop = 0));
+    return () => cancelAnimationFrame(id);
+  }, []);
   const trimmed = name.trim();
   const banned = trimmed !== "" && isBannedCategoryName(trimmed);
   const match = useMemo(
@@ -39,17 +52,31 @@ export function MoveDialog(props: {
     .filter((c) => c.section === section && c.id !== props.currentCategoryId)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return (
+  // Drawn on top of the whole app, so the top bar never covers the title.
+  return createPortal(
     <div className="modal-backdrop" onClick={props.onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Move photos" onClick={(e) => e.stopPropagation()}>
-        <h2>{props.title ?? `Move ${props.count} photo${props.count === 1 ? "" : "s"}`}</h2>
-        {props.preview && props.preview.length > 0 && (
+      <div ref={box} className="modal" role="dialog" aria-modal="true" aria-label="Move photos" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title">{props.title ?? `Move ${props.count} photo${props.count === 1 ? "" : "s"}`}</h2>
+        {props.preview?.length === 1 && props.preview[0].isVideo ? (
+          // One video: it plays right away, so the person can see what's in it before choosing.
+          <div className="move-video">
+            <VideoPlayer photo={props.preview[0]} />
+          </div>
+        ) : props.preview && props.preview.length > 0 && (
           <ul className={`move-preview ${props.preview.length === 1 ? "single" : ""}`}>
-            {props.preview.slice(0, 8).map((p) => (
-              <li key={p.id}><Thumb photo={p} alt={p.label ?? p.fileName} /></li>
+            {props.preview.slice(0, 8).map((p, i) => (
+              <li key={p.id}>
+                <button className="preview-open" aria-label={`Look closer at ${p.label ?? p.fileName}`} onClick={() => setZoomAt(i)}>
+                  <Thumb photo={p} alt={p.label ?? p.fileName} />
+                </button>
+              </li>
             ))}
           </ul>
         )}
+        {props.preview && props.preview.length > 0 && !(props.preview.length === 1 && props.preview[0].isVideo) && (
+          <p className="muted small zoom-hint">Tap the {props.preview.length === 1 ? "photo" : "photos"} to look closer.</p>
+        )}
+        {zoomAt !== null && props.preview && <PhotoZoom photos={props.preview.slice(0, 8)} start={zoomAt} onClose={() => setZoomAt(null)} />}
         {(guess || props.onDelete) && (
           <div className="guess">
             {guess && (
@@ -66,7 +93,7 @@ export function MoveDialog(props: {
             )}
             {props.onDelete && (
               <button className="chip danger" onClick={props.onDelete}>
-                {props.count === 1 ? "Delete photo" : `Delete ${props.count} photos`}
+                {props.count === 1 ? (props.preview?.[0]?.isVideo ? "Delete video" : "Delete photo") : `Delete ${props.count} photos`}
               </button>
             )}
           </div>
@@ -107,6 +134,7 @@ export function MoveDialog(props: {
           <button onClick={props.onClose}>Cancel</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

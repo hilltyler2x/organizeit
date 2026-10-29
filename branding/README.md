@@ -10,3 +10,10 @@
   4. Google Play: `android-phone-*` (1080×1920) are the phone screenshots, `play-feature-graphic.png` (1024×500) and `play-icon-512.png` the listing graphics. Pass a set name as a second argument to build just one set, e.g. `android-phone`.
 
 Both scripts need Playwright (`npm i --no-save playwright`) and ImageMagick (`convert`).
+
+## Android background-sorting demo video
+
+Google Play's foreground service (dataSync) declaration needs a video of background sorting.
+Run **Actions > Android demo video**: it makes a demo camera roll (`store/demo-photos.mjs`),
+sorts it on an emulator and records the screen (`store/record-android-demo.sh`). The video is in
+the run's `android-demo-video` artifact.

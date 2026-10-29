@@ -4,6 +4,7 @@ import { needsPerson } from "../core/library";
 import { countItems, formatBytes } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
+import { BackLayer, useBack } from "./back";
 import { MoveDialog } from "./MoveDialog";
 import { useLongPress, useScrolledPast } from "./selection";
 import { Thumb, forgetImages } from "./Thumb";
@@ -70,6 +71,7 @@ export function ReviewView({ lib, onDone }: { lib: Library; onDone: () => void }
     setSelected(new Set());
     setSelecting(false);
   };
+  useBack(selecting, clearSelection, BackLayer.select);
 
   const deletePhotos = (list: Photo[]) => {
     const ids = list.map((p) => p.id);

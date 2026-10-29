@@ -23,7 +23,10 @@ interface PhotoLibraryPlugin {
   deleteAssets(options: { ids: string[] }): Promise<{ deleted: boolean }>;
   /** Fires the moment photos are added to or removed from the library while the app runs. */
   addListener(event: "libraryChanged", listener: (info: { added?: number }) => void): Promise<PluginListenerHandle>;
-  /** iOS only. Adds photos to a Photos album, creating it if needed. */
+  /**
+   * Adds photos to an album, creating it if needed. iOS: a Photos album pointing at the
+   * originals. Android: copies in Pictures/OrganizeIt/<title> (Android 10+).
+   */
   addToAlbum(options: { ids: string[]; title: string }): Promise<{ added: number; title: string; created: boolean }>;
   /** Copies a photo to the clipboard so it can be pasted into other apps. */
   copyImage(options: { id: string }): Promise<void>;
@@ -37,8 +40,11 @@ export const PhotoLibrary = registerPlugin<PhotoLibraryPlugin>("PhotoLibrary");
 
 export const isNativeApp = Capacitor.isNativePlatform();
 
-/** Whether photos can be put into a Photos album (the iPhone app only, for now). */
-export const canMakeAlbums = Capacitor.getPlatform() === "ios";
+/** Whether photos can be put into an album (the iPhone and Android apps). */
+export const canMakeAlbums = isNativeApp;
+
+/** Android albums are folders of copies, since Android can't point an album at the originals. */
+export const albumsCopyPhotos = Capacitor.getPlatform() === "android";
 
 /** Where photos from the phone's library go when deleted. */
 export const deviceDeleteTarget: DeleteTarget = Capacitor.getPlatform() === "android" ? "android" : "ios";

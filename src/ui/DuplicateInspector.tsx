@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { formatBytes, formatDuration } from "../core/storage";
 import type { Photo } from "../core/types";
 import type { Library } from "../lib/useLibrary";
+import { BackLayer, useBack } from "./back";
 import { useImageUrl } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
 import { usePinchZoom } from "./zoom";
@@ -22,6 +23,7 @@ export function DuplicateInspector(props: {
   busy: boolean;
   onClose: () => void;
 }) {
+  useBack(true, props.onClose, BackLayer.menu);
   const { photos } = props;
   const [index, setIndex] = useState(Math.min(props.start, photos.length - 1));
   const photo = photos[Math.min(index, photos.length - 1)];

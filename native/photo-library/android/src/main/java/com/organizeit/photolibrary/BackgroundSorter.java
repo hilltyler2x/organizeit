@@ -157,10 +157,11 @@ final class BackgroundSorter {
         if (!running.compareAndSet(false, true)) return Outcome.BUSY;
         ExecutorService pool = Executors.newFixedThreadPool(BATCH);
         int sorted = 0;
+        // How the run ended, logged with how many photos it sorted (as on iOS).
         String ending = null;
         try {
             if (!hasPhotoAccess(context)) {
-                note(context, "Stopped: OrganizeIt doesn't have access to Photos.");
+                ending = "Stopped: OrganizeIt doesn't have access to Photos.";
                 return Outcome.BLOCKED;
             }
             JSONObject first = store.config();
@@ -190,7 +191,10 @@ final class BackgroundSorter {
                     if (asset != null) skip.add(asset.optString("id"));
                 }
                 Batch batch = nextBatch(config, skip);
-                if (batch.assets.isEmpty()) return Outcome.FINISHED;
+                if (batch.assets.isEmpty()) {
+                    ending = "All caught up.";
+                    return Outcome.FINISHED;
+                }
                 List<Future<Answer>> answers = new ArrayList<>();
                 final JSONArray cats = new JSONArray(categories.toString());
                 for (JSONObject asset : batch.assets) {
@@ -314,8 +318,8 @@ final class BackgroundSorter {
         }
         long knownUpTo = (long) config.optDouble("knownUpTo", 0);
         int fresh = 0;
-        String where = "(" + MediaStore.MediaColumns.DATE_TAKEN + " > ? OR " + MediaStore.MediaColumns.DATE_ADDED + " > ?)";
-        String[] args = { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) };
+        String where = "(" + MediaStore.MediaColumns.DATE_TAKEN + " > ? OR " + MediaStore.MediaColumns.DATE_ADDED + " > ?) AND " + MediaAssets.notAlbumCopy();
+        String[] args = MediaAssets.concat(new String[] { String.valueOf(knownUpTo), String.valueOf(knownUpTo / 1000) }, MediaAssets.albumArgs());
         String order = MediaStore.MediaColumns.DATE_ADDED + " DESC";
         for (boolean video : new boolean[] { false, true }) {
             try (Cursor c = resolver.query(MediaAssets.table(video), MediaAssets.projection(video), where, args, order)) {

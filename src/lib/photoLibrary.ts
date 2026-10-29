@@ -46,8 +46,9 @@ export const deviceDeleteTarget: DeleteTarget = Capacitor.getPlatform() === "and
 /** Reads the metadata of every photo on the device, in pages. */
 export async function listAllAssets(onProgress?: (done: number, total: number) => void): Promise<DeviceAsset[]> {
   const all: DeviceAsset[] = [];
-  let offset: number | null = 0;
-  while (offset !== null) {
+  let offset: number | null | undefined = 0;
+  // The last page has no next offset: null, or missing altogether (Android drops null values).
+  while (offset != null) {
     const page: Awaited<ReturnType<PhotoLibraryPlugin["list"]>> = await PhotoLibrary.list({ offset, limit: 1000 });
     all.push(...page.assets);
     onProgress?.(all.length, page.total);

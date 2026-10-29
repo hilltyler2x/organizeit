@@ -1,0 +1,39 @@
+ACTIVITY MANAGER SERVICES (dumpsys activity services)
+  User 0 active services:
+  * ServiceRecord{4f453f8 u0 com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0}
+    intent={cmp=com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0}
+    packageName=com.organizeit.app
+    processName=com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0
+    baseDir=/data/app/~~fFFlb5_8GSFh5gSaYIi-gQ==/com.google.android.webview-cy7ddvn0hwMWS-xpYlgEQg==/WebViewGoogle.apk
+    dataDir=/data/user/0/com.google.android.webview
+    app=ProcessRecord{fe19ef1 6153:com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0/u0a192i0}
+    isolationHostProc=ProcessRecord{fe19ef1 6153:com.google.android.webview:sandboxed_process0:org.chromium.content.app.SandboxedProcessService0:0/u0a192i0}
+    mAllowWhileInUsePermissionInFgsReason=PROC_STATE_TOP
+    allowUiJobScheduling=false
+    recentCallingPackage=com.organizeit.app
+    recentCallingUid=10192
+    allowStartForeground=PROC_STATE_TOP
+    startForegroundCount=0
+    infoAllowStartForeground=[callingPackage: com.organizeit.app; callingUid: 10192; uidState: TOP ; uidBFSL: [BFSL]; intent: Intent { cmp=com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0 (has extras) }; code:PROC_STATE_TOP; tempAllowListReason:<null>; targetSdkVersion:34; callerTargetSdkVersion:36; startForegroundCount:0; bindFromPackage:null: isBindService:true]
+    createTime=-49s368ms startingBgTimeout=--
+    lastActivity=-48s174ms restartTime=-49s120ms createdFromFg=true
+    Bindings:
+    * IntentBindRecord{a2cd88a CREATE}:
+      intent={cmp=com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0}
+      binder=android.os.BinderProxy@3ce6efb
+      requested=true received=true hasBound=true doRebind=false
+      * Client AppBindRecord{5d7eb18 ProcessRecord{8ab9c7b 6095:com.organizeit.app/u0a192}}
+        Per-process Connections:
+          ConnectionRecord{7854157 u0 CR WPRI com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@e44ad6 flags=0x80000021}
+          ConnectionRecord{8918388 u0 CR IMP com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@ee6632b flags=0x80000041}
+    All Connections:
+      ConnectionRecord{7854157 u0 CR WPRI com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@e44ad6 flags=0x80000021}
+      ConnectionRecord{8918388 u0 CR IMP com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@ee6632b flags=0x80000041}
+
+  Connection bindings to services:
+  * ConnectionRecord{7854157 u0 CR WPRI com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@e44ad6 flags=0x80000021}
+    binding=AppBindRecord{5d7eb18 com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:com.organizeit.app}
+    conn=android.os.BinderProxy@e44ad6 flags=0x80000021
+  * ConnectionRecord{8918388 u0 CR IMP com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:@ee6632b flags=0x80000041}
+    binding=AppBindRecord{5d7eb18 com.organizeit.app/org.chromium.content.app.SandboxedProcessService0:0:com.organizeit.app}
+    conn=android.os.BinderProxy@ee6632b flags=0x80000041

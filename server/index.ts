@@ -146,6 +146,7 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
           freeFromIp(req.ip ?? "unknown", cost) &&
           (await subs.usage.add(key, cost, subs.freeLimit)) !== null
         ) {
+          res.locals.charged = { key, cost };
           return next();
         }
         res.status(402).json({
@@ -156,7 +157,8 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
       }
       const limit = limitFor(subs, plan);
       if (limit > 0) {
-        if ((await subs.usage.add(usageKey(userId, plan), cost, limit)) === null) {
+        const key = usageKey(userId, plan);
+        if ((await subs.usage.add(key, cost, limit)) === null) {
           res.status(402).json({
             error: plan.intro
               ? `Your first month includes ${limit.toLocaleString("en-US")} photos. The rest are sorted when your subscription renews.`
@@ -165,6 +167,7 @@ function requireAccess(passcode: string | undefined, subs: SubscriptionOptions |
           });
           return;
         }
+        res.locals.charged = { key, cost };
       }
       next();
     } catch (err) {
@@ -270,6 +273,9 @@ export function createApp(
     try {
       res.json(await run(client, req.body));
     } catch (err) {
+      // Nothing was sorted, so the photos don't count against the free preview or the month.
+      const charged = res.locals.charged as { key: string; cost: number } | undefined;
+      if (charged) await subs?.usage.add(charged.key, -charged.cost, 2_147_483_647).catch(() => undefined);
       if (err instanceof ClassifyError) {
         res.status(err.status).json({ error: err.message });
       } else if (err instanceof Anthropic.RateLimitError) {
@@ -277,7 +283,8 @@ export function createApp(
       } else if (err instanceof Anthropic.AuthenticationError) {
         res.status(503).json({ error: "The server's Anthropic API key was rejected." });
       } else if (err instanceof Anthropic.APIError) {
-        res.status(502).json({ error: `AI request failed (${err.status ?? "network"}).` });
+        console.error("AI request failed:", err.status, err.message);
+        res.status(502).json({ error: `AI request failed (${err.status ?? "network"}): ${err.message}`.slice(0, 300) });
       } else {
         console.error(err);
         res.status(500).json({ error: "Unexpected server error." });

@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { Photo } from "../core/types";
+import { BackLayer, useBack } from "./back";
 import { useImageUrl } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
 import { usePinchZoom } from "./zoom";
@@ -10,6 +11,7 @@ import { usePinchZoom } from "./zoom";
 // whole app, like the duplicates inspector, so the top bar can't cover it.
 
 export function PhotoZoom(props: { photos: Photo[]; start: number; onClose: () => void }) {
+  useBack(true, props.onClose, BackLayer.menu);
   const { photos } = props;
   const [index, setIndex] = useState(Math.min(props.start, photos.length - 1));
   const photo = photos[Math.min(index, photos.length - 1)];

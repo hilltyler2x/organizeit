@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Photo } from "../core/types";
 import { copyPhoto, sharePhoto } from "../lib/photoActions";
+import { BackLayer, useBack } from "./back";
 import { useImageUrl } from "./Thumb";
 
 // The menu that comes up when you press and hold a photo, like in the iPhone Photos app: the
@@ -35,6 +36,7 @@ export function copyAndShare(photo: Photo): MenuItem[] {
 }
 
 export function PhotoMenu({ photo, items, onClose }: { photo: Photo; items: MenuItem[]; onClose: () => void }) {
+  useBack(true, onClose, BackLayer.menu);
   const thumb = useImageUrl(photo, "thumb");
   const full = useImageUrl(photo, "full");
   const first = useRef<HTMLButtonElement>(null);

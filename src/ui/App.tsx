@@ -9,6 +9,7 @@ import { browserPhotoSource, filesToPicked } from "../lib/photoSource";
 import { buy, canBuy, monthlyOffer, restore, type Offer } from "../lib/purchases";
 import { SORT_LIMIT, useLibrary, type Library } from "../lib/useLibrary";
 import { CategoryView } from "./CategoryView";
+import { BackLayer, useBack } from "./back";
 import { DuplicatesView } from "./DuplicatesView";
 import { Toaster } from "./PhotoMenu";
 import { ReviewView } from "./ReviewView";
@@ -46,6 +47,8 @@ export function App() {
     setMenuOpen(false);
     mainRef.current?.scrollTo(0, 0);
   };
+  useBack(menuOpen, () => setMenuOpen(false), BackLayer.menu);
+  useBack(view.kind !== "overview", () => open({ kind: "overview" }), BackLayer.page);
 
   return (
     <div

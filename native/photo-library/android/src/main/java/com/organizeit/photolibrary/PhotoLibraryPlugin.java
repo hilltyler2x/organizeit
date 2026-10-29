@@ -6,6 +6,8 @@ import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.database.ContentObserver;
@@ -43,9 +45,10 @@ import java.util.concurrent.Executors;
 import org.json.JSONException;
 
 /**
- * Gives OrganizeIt read, delete, copy and share access to the Android photo library through
- * MediaStore. Photos are read in place; nothing is copied out except small JPEG previews and
- * the one photo being copied or shared.
+ * Gives OrganizeIt read, delete, album, copy and share access to the Android photo library
+ * through MediaStore. Photos are read in place; nothing is copied out except small JPEG
+ * previews, the album copies the person asks for (addToAlbum) and the one photo being copied
+ * or shared.
  */
 @CapacitorPlugin(
     name = "PhotoLibrary",
@@ -53,7 +56,9 @@ import org.json.JSONException;
         @Permission(strings = { Manifest.permission.READ_MEDIA_IMAGES }, alias = PhotoLibraryPlugin.PHOTOS),
         @Permission(strings = { Manifest.permission.READ_MEDIA_VIDEO }, alias = PhotoLibraryPlugin.VIDEOS),
         @Permission(strings = { Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED }, alias = PhotoLibraryPlugin.SELECTED),
-        @Permission(strings = { Manifest.permission.READ_EXTERNAL_STORAGE }, alias = PhotoLibraryPlugin.STORAGE)
+        @Permission(strings = { Manifest.permission.READ_EXTERNAL_STORAGE }, alias = PhotoLibraryPlugin.STORAGE),
+        // Shows the "Sorting photos" progress notification while sorting carries on after the app is closed.
+        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = PhotoLibraryPlugin.NOTIFICATIONS)
     }
 )
 public class PhotoLibraryPlugin extends Plugin {
@@ -62,6 +67,7 @@ public class PhotoLibraryPlugin extends Plugin {
     static final String VIDEOS = "videos";
     static final String SELECTED = "selected";
     static final String STORAGE = "storage";
+    static final String NOTIFICATIONS = "notifications";
 
     private final ExecutorService executor = Executors.newFixedThreadPool(3);
     private ActivityResultLauncher<IntentSenderRequest> deleteLauncher;
@@ -126,9 +132,9 @@ public class PhotoLibraryPlugin extends Plugin {
     @PluginMethod
     public void requestPermission(PluginCall call) {
         if (Build.VERSION.SDK_INT >= 34) {
-            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS, SELECTED }, call, "permissionCallback");
+            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS, SELECTED, NOTIFICATIONS }, call, "permissionCallback");
         } else if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS }, call, "permissionCallback");
+            requestPermissionForAliases(new String[] { PHOTOS, VIDEOS, NOTIFICATIONS }, call, "permissionCallback");
         } else {
             requestPermissionForAlias(STORAGE, call, "permissionCallback");
         }
@@ -172,8 +178,8 @@ public class PhotoLibraryPlugin extends Plugin {
             String order = MediaStore.MediaColumns.DATE_ADDED + " ASC, " + MediaStore.MediaColumns._ID + " ASC";
             android.content.ContentResolver resolver = getContext().getContentResolver();
             try (
-                Cursor images = resolver.query(MediaAssets.table(false), MediaAssets.projection(false), null, null, order);
-                Cursor videos = resolver.query(MediaAssets.table(true), MediaAssets.projection(true), null, null, order)
+                Cursor images = resolver.query(MediaAssets.table(false), MediaAssets.projection(false), MediaAssets.notAlbumCopy(), MediaAssets.albumArgs(), order);
+                Cursor videos = resolver.query(MediaAssets.table(true), MediaAssets.projection(true), MediaAssets.notAlbumCopy(), MediaAssets.albumArgs(), order)
             ) {
                 int imageCount = images == null ? 0 : images.getCount();
                 int total = imageCount + (videos == null ? 0 : videos.getCount());
@@ -285,6 +291,124 @@ public class PhotoLibraryPlugin extends Plugin {
     private void askToDelete(PluginCall call, android.content.IntentSender sender) {
         pendingDelete = call;
         getActivity().runOnUiThread(() -> deleteLauncher.launch(new IntentSenderRequest.Builder(sender).build()));
+    }
+
+    /**
+     * Puts copies of photos in the folder Pictures/OrganizeIt/<title>, which Google Photos and
+     * gallery apps show as an album named <title>. Android has no albums that only point at
+     * the originals, as iOS does, so the copies take space. Photos already there are skipped.
+     * OrganizeIt leaves these copies out when it reads the library, so they aren't sorted again.
+     */
+    @PluginMethod
+    public void addToAlbum(PluginCall call) {
+        String title = folderName(call.getString("title", ""));
+        if (title.isEmpty()) {
+            call.reject("Missing album name");
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 29) {
+            call.reject("Albums need Android 10 or newer");
+            return;
+        }
+        List<String> ids = new ArrayList<>();
+        try {
+            JSArray list = call.getArray("ids", new JSArray());
+            for (int i = 0; i < list.length(); i++) ids.add(list.getString(i));
+        } catch (JSONException e) {
+            call.reject("Invalid ids");
+            return;
+        }
+        executor.execute(() -> {
+            ContentResolver resolver = getContext().getContentResolver();
+            String folder = MediaAssets.ALBUMS_PATH + title + "/";
+            boolean created = !folderHasPhotos(resolver, folder);
+            int added = 0;
+            int found = 0;
+            try {
+                for (String id : ids) {
+                    Uri source = uriFor(id);
+                    String name;
+                    String mime;
+                    long taken;
+                    try (
+                        Cursor c = resolver.query(
+                            source,
+                            new String[] { MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_TAKEN },
+                            null,
+                            null,
+                            null
+                        )
+                    ) {
+                        if (c == null || !c.moveToFirst()) continue; // deleted since
+                        name = c.getString(0) == null ? id + ".jpg" : c.getString(0);
+                        mime = c.getString(1) == null ? "image/jpeg" : c.getString(1);
+                        taken = c.getLong(2);
+                    }
+                    found++;
+                    Uri table = MediaAssets.table(MediaAssets.isVideo(id));
+                    if (inFolder(resolver, table, folder, name)) continue;
+                    copy(resolver, table, source, folder, name, mime, taken);
+                    added++;
+                }
+            } catch (Exception e) {
+                call.reject("Could not add photos to the album", e);
+                return;
+            }
+            if (found == 0) {
+                call.reject("Those photos are no longer on this phone", "NOT_FOUND");
+                return;
+            }
+            JSObject ret = new JSObject();
+            ret.put("added", added);
+            ret.put("title", title);
+            ret.put("created", created && added > 0);
+            call.resolve(ret);
+        });
+    }
+
+    /** The album name as a folder name: no slashes or other characters folders can't have. */
+    private static String folderName(String title) {
+        return title.replaceAll("[\\\\/:*?\"<>|]", "-").replaceAll("\\s+", " ").trim().replaceAll("^\\.+", "");
+    }
+
+    private static boolean folderHasPhotos(ContentResolver resolver, String folder) {
+        String where = MediaStore.MediaColumns.RELATIVE_PATH + " = ?";
+        for (boolean video : new boolean[] { false, true }) {
+            try (Cursor c = resolver.query(MediaAssets.table(video), new String[] { MediaStore.MediaColumns._ID }, where, new String[] { folder }, null)) {
+                if (c != null && c.getCount() > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean inFolder(ContentResolver resolver, Uri table, String folder, String name) {
+        String where = MediaStore.MediaColumns.RELATIVE_PATH + " = ? AND " + MediaStore.MediaColumns.DISPLAY_NAME + " = ?";
+        try (Cursor c = resolver.query(table, new String[] { MediaStore.MediaColumns._ID }, where, new String[] { folder, name }, null)) {
+            return c != null && c.getCount() > 0;
+        }
+    }
+
+    /** Copies a photo or video (into `table`, the images or videos table) in the album folder. */
+    private static void copy(ContentResolver resolver, Uri table, Uri source, String folder, String name, String mime, long taken) throws Exception {
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+        values.put(MediaStore.Images.Media.MIME_TYPE, mime);
+        values.put(MediaStore.Images.Media.RELATIVE_PATH, folder);
+        if (taken > 0) values.put(MediaStore.Images.Media.DATE_TAKEN, taken); // keeps the copy at the photo's own date
+        values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        Uri target = resolver.insert(table, values);
+        if (target == null) throw new Exception("Could not create the album copy");
+        try (InputStream in = resolver.openInputStream(source); OutputStream out = resolver.openOutputStream(target)) {
+            if (in == null || out == null) throw new Exception("Could not copy the photo");
+            byte[] buf = new byte[64 * 1024];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        } catch (Exception e) {
+            resolver.delete(target, null, null);
+            throw e;
+        }
+        ContentValues done = new ContentValues();
+        done.put(MediaStore.Images.Media.IS_PENDING, 0);
+        resolver.update(target, done, null, null);
     }
 
     /**

@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { findMatchingCategory, isBannedCategoryName, tidyCategoryName } from "../core/categories";
 import { SECTIONS, type Category, type Photo, type Section } from "../core/types";
+import { BackLayer, useBack } from "./back";
 import { PhotoZoom } from "./PhotoZoom";
 import { Thumb } from "./Thumb";
 import { VideoPlayer } from "./VideoPlayer";
@@ -23,6 +24,7 @@ export function MoveDialog(props: {
   onDelete?: () => void;
   onClose: () => void;
 }) {
+  useBack(true, props.onClose, BackLayer.dialog);
   const [section, setSection] = useState<Section>(props.defaultSection);
   const [name, setName] = useState("");
   const [zoomAt, setZoomAt] = useState<number | null>(null);

@@ -37,6 +37,13 @@ jobs:
           npm install --no-save playwright@1.63.0
           npx playwright install --with-deps chromium
           node branding/store/demo-photos.mjs "$RUNNER_TEMP/photos" 90
+      - name: Check the sorting server
+        run: |
+          API=https://organizeit-93mu.onrender.com
+          img=$(base64 -w0 "$RUNNER_TEMP/photos/IMG_5000.jpg")
+          printf '{"categories":[],"photos":[{"image":"%s","mediaType":"image/jpeg","fileName":"IMG_5000.jpg"}]}' "$img" > "$RUNNER_TEMP/probe.json"
+          curl -s -m 120 -H 'content-type: application/json' -H "x-organizeit-user: ci-probe-${{ github.run_id }}" --data @"$RUNNER_TEMP/probe.json" "$API/api/classify-batch"; echo
+          curl -s -H 'x-organizeit-user: android-b5ce649fd3d24049' "$API/api/subscription"; echo
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

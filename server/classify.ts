@@ -3,12 +3,12 @@ import { z } from "zod";
 import { findMatchingCategory, isBannedCategoryName, pickCategoryName } from "../src/core/categories";
 import type { Classification, Section } from "../src/core/types";
 
-// Two passes keep the AI bill low: every photo goes to a fast, cheap model first, and only the
-// ones it isn't sure about (or can't place) are asked again of the most capable model. Both can
-// be switched on the server without a new app build; CLASSIFY_ESCALATE_MODEL=none turns the
-// second pass off.
+// Every photo goes to a fast, cheap model. Photos it isn't sure about land in the person's
+// "To review" queue. A second pass that re-asks those of a bigger model can be turned on with
+// CLASSIFY_ESCALATE_MODEL (e.g. claude-opus-5-5), but it costs ~40x more per photo, so it is off
+// by default. Both can be switched on the server without a new app build.
 export const MODEL = process.env.CLASSIFY_MODEL || "claude-haiku-5-5";
-const escalateSetting = process.env.CLASSIFY_ESCALATE_MODEL ?? "claude-opus-5-5";
+const escalateSetting = process.env.CLASSIFY_ESCALATE_MODEL ?? "none";
 export const ESCALATE_MODEL = escalateSetting && escalateSetting !== "none" && escalateSetting !== MODEL ? escalateSetting : null;
 /** First-pass answers below this confidence go to the second model. */
 export const ESCALATE_BELOW = Number(process.env.CLASSIFY_ESCALATE_BELOW ?? 0.75);

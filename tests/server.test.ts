@@ -1,6 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../server/index";
+
+// The second pass is off by default (it costs ~40x more); these tests cover it, so turn it on.
+vi.hoisted(() => {
+  process.env.CLASSIFY_ESCALATE_MODEL = "claude-opus-5-5";
+});
 
 // Fake Anthropic client that replays canned JSON answers and records requests.
 function fakeClient(answers: object[]) {

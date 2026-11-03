@@ -35,11 +35,11 @@ without one) is capped at `SORTS_PER_HOUR` photos per hour (default 10,000). On 
 the server sleeps after 15 minutes idle, so the first sort after a break takes about a minute
 to start; for paying customers use a paid instance (Starter or above), which stays awake.
 
-Sorting runs in two passes to keep the AI bill down: every photo goes to `CLASSIFY_MODEL`
-(default `claude-haiku-5-5`, fast and cheap), and only photos it is less than
-`CLASSIFY_ESCALATE_BELOW` sure about (default 0.75) or can't place are asked again of
-`CLASSIFY_ESCALATE_MODEL` (default `claude-opus-5-5`). `CLASSIFY_ESCALATE_MODEL=none` turns
-the second pass off.
+Every photo goes to `CLASSIFY_MODEL` (default `claude-haiku-5-5`, fast and cheap); photos it
+isn't sure about go to the person's To review queue. Setting `CLASSIFY_ESCALATE_MODEL` (e.g.
+`claude-opus-5-5`; default `none`) adds a second pass that re-asks photos it is less than
+`CLASSIFY_ESCALATE_BELOW` sure about (default 0.75) or can't place. Opus costs about 40x more
+per photo than Haiku, so leave it off unless accuracy matters more than the bill.
 
 ### Subscriptions
 

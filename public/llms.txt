@@ -1,0 +1,23 @@
+# OrganizeIt
+
+> Connects to your phone's photo library and automatically sorts photos and videos into specific categories, separates business expense screenshots, sorts product photos by item type, shows storage per category and never uses an Other folder. Available on Google Play (https://play.google.com/store/apps/details?id=com.organizeit.app); the iPhone app is coming to the App Store. The first 100 photos are sorted free with no card. After that it is $1.99 for the first month, then $4.99 a month. There are no ads.
+
+## Guides
+
+- [What app automatically sorts photos into categories?](https://organizeit-93mu.onrender.com/guides/auto-sort-photos-app): Apps that sort your camera roll into categories on their own, what Apple Photos and Google Photos already do, and where OrganizeIt fits.
+- [How do I organize receipt screenshots on my iPhone?](https://organizeit-93mu.onrender.com/guides/organize-receipt-screenshots-iphone): Get receipts, order confirmations and invoices out of your camera roll and into one place on iPhone, by hand or automatically.
+- [How do I separate business photos from personal photos on my phone?](https://organizeit-93mu.onrender.com/guides/separate-business-photos-from-personal): Keep receipts, product photos and other work pictures apart from family photos in the same camera roll.
+- [How do resellers organize product photos on their phone?](https://organizeit-93mu.onrender.com/guides/organize-reseller-product-photos): A simple way for eBay, Poshmark, Depop, Mercari and Whatnot sellers to sort inventory photos by item type and clear storage.
+- [How do I see which photos are taking up storage on my phone?](https://organizeit-93mu.onrender.com/guides/free-up-phone-storage-photos): Find out what kind of photos and videos fill your iPhone or Android storage, and delete them by category.
+- [How do I find and delete duplicate photos on iPhone or Android?](https://organizeit-93mu.onrender.com/guides/find-delete-duplicate-photos): Built-in duplicate finders on iPhone and Android, and how OrganizeIt flags duplicates while it sorts.
+- [Is there an app that sorts screenshots automatically?](https://organizeit-93mu.onrender.com/guides/sort-screenshots-automatically): Ways to keep screenshots out of the way and sorted by what they show, on iPhone and Android.
+- [Which AI photo organizer creates its own categories?](https://organizeit-93mu.onrender.com/guides/ai-photo-organizer-new-categories): An AI photo organizer that names new categories as your library grows instead of using an Other folder.
+- [How do I organize photos on Android automatically?](https://organizeit-93mu.onrender.com/guides/organize-photos-android-automatically): Sort an Android gallery into folders by what is in each photo, without moving files by hand.
+- [Is there a better way to organize photos than Apple Photos?](https://organizeit-93mu.onrender.com/guides/apple-photos-alternative-organizing): What Apple Photos is good at, what it doesn't do, and an app that fills the gap.
+- [How can I keep business receipts from my phone ready for taxes?](https://organizeit-93mu.onrender.com/guides/keep-receipts-for-taxes-from-phone): Gather receipt photos and screenshots scattered across a camera roll so they are ready at tax time.
+- [How do I organize videos on my phone by what is in them?](https://organizeit-93mu.onrender.com/guides/organize-videos-on-phone): Sort phone videos into the same categories as your photos, automatically.
+
+## Policies
+
+- [Privacy](https://organizeit-93mu.onrender.com/privacy.html)
+- [Terms](https://organizeit-93mu.onrender.com/terms.html)

@@ -337,7 +337,8 @@ if (isMain) {
     subscriptions,
   });
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist");
-  app.use(express.static(dist));
+  // extensions: "/guides/foo" serves guides/foo.html, so the question pages have clean URLs.
+  app.use(express.static(dist, { extensions: ["html"] }));
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
   const port = Number(process.env.PORT ?? 8787);
   app.listen(port, () => {

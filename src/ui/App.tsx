@@ -127,6 +127,8 @@ export function App() {
         <main ref={mainRef}>
           {!lib.ready || (lib.native && lib.permission === null) ? (
             <p className="muted">Loading your library…</p>
+          ) : !lib.aiConsent ? (
+            <AiConsent lib={lib} />
           ) : lib.native && lib.permission !== "granted" && lib.permission !== "limited" ? (
             <ConnectLibrary lib={lib} />
           ) : view.kind === "review" ? (
@@ -187,10 +189,10 @@ function Overview({ lib, usage, duplicates, onOpen, onReview, onDuplicates, onAd
       {lib.native && lib.permission === "limited" && (
         <div className="queue-row limited">
           <span>
-            OrganizeIt can only see the photos you picked, not your whole library. Allow full access so every photo gets sorted.
+            OrganizeIt can only see the photos you picked, so only those are sorted. You can change this any time.
             {lib.canMakeAlbums && " In Settings, tap Photos, then Full Access."}
           </span>
-          <button className="primary" onClick={lib.allowFullAccess}>Allow full access</button>
+          <button className="primary" onClick={lib.allowFullAccess}>Change access</button>
         </div>
       )}
       {lib.photos.length === 0 && lib.native ? (
@@ -249,6 +251,48 @@ function Overview({ lib, usage, duplicates, onOpen, onReview, onDuplicates, onAd
   );
 }
 
+/**
+ * Before any photo leaves the device, says exactly what is sent, to whom and why, and asks the
+ * person to agree (App Store guideline 5.1.1). Nothing is sent until they tap Agree.
+ */
+function AiConsent({ lib }: { lib: Library }) {
+  const [declined, setDeclined] = useState(false);
+  return (
+    <div className="welcome connect consent">
+      <img className="connect-icon" src="/icon.svg" alt="" />
+      <h1>How OrganizeIt sorts your photos</h1>
+      <p>
+        OrganizeIt uses an AI service, <strong>Claude by Anthropic</strong>, to recognise what each photo shows and pick its
+        category.
+      </p>
+      <ul className="consent-list">
+        <li>
+          <strong>What is sent:</strong> a small, low-resolution preview of each photo (for a video, a few still frames),
+          with its file name and size.
+        </li>
+        <li>
+          <strong>Who receives it:</strong> the OrganizeIt server, which passes it to Anthropic to choose a category.
+        </li>
+        <li>
+          <strong>What happens to it:</strong> it is used only to sort that photo. It isn't kept, sold or shared with anyone
+          else, and Anthropic doesn't use it to train its AI.
+        </li>
+        <li>Your full-size photos stay on your {lib.native ? "phone" : "device"}.</li>
+      </ul>
+      <p className="muted small">
+        Details are in the <a href={`${API}/privacy.html`} target="_blank" rel="noreferrer">privacy policy</a>.
+      </p>
+      <button className="primary big" onClick={lib.giveAiConsent}>Agree and continue</button>
+      <button className="link" onClick={() => setDeclined(true)}>Not now</button>
+      {declined && (
+        <p className="muted small">
+          No problem, nothing has been sent. OrganizeIt needs the AI to sort photos, so sorting starts once you agree.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ConnectLibrary({ lib }: { lib: Library }) {
   const denied = lib.permission === "denied";
   return (
@@ -266,8 +310,8 @@ function ConnectLibrary({ lib }: { lib: Library }) {
         </>
       ) : (
         <>
-          <button className="primary big" onClick={lib.connectLibrary}>Allow access to Photos</button>
-          <p className="muted small">Your photos stay on your phone. Only a small preview of each is sent to be sorted.</p>
+          <p className="muted">Next, your phone will ask whether OrganizeIt may see your photos.</p>
+          <button className="primary big" onClick={lib.connectLibrary}>Continue</button>
         </>
       )}
     </div>

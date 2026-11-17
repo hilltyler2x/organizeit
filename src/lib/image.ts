@@ -1,5 +1,5 @@
 // Browser image helpers: read dimensions and make small JPEG copies for thumbnails
-// and for sending to the classifier (so a 12 MB photo goes up as ~150 KB).
+// and full-quality copies for the classifier (sized to what the AI can see, see quality.ts).
 
 export interface Decoded {
   width: number;

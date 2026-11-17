@@ -221,7 +221,9 @@ export function createApp(
   const app = express();
   app.set("trust proxy", 1);
   app.use("/api", allowApp);
-  app.use(express.json({ limit: "25mb" }));
+  // Photos arrive as full-quality JPEGs of up to ~3.6 MP (src/lib/quality.ts), about 1-4 MB each
+  // once base64-encoded, and the app sends four per request.
+  app.use(express.json({ limit: "60mb" }));
   const passcodes = (options.passcode ?? "").split(",").map((p) => p.trim()).filter(Boolean);
   const check = passcodeChecker(passcodes, options.owners);
   const gate = requirePasscode(options.passcode || undefined, check);

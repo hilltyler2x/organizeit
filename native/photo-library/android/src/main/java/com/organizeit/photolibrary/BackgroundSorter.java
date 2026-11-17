@@ -341,11 +341,13 @@ final class BackgroundSorter {
     private Answer classify(JSONObject asset, JSONObject config, JSONArray categories, JSONArray learned) {
         String image;
         try {
-            // A video is sent as six frames from across it in one larger grid image.
+            // Full quality, as large as the AI can see. A video is sent as six frames from across
+            // it in one grid image.
             boolean video = MediaAssets.isVideo(asset.getString("id"));
-            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), video ? MediaAssets.SHEET_SIDE : 768, true);
+            int side = video ? MediaAssets.SHEET_SIDE : MediaAssets.classifierSide(asset.optInt("width"), asset.optInt("height"));
+            Bitmap bitmap = MediaAssets.still(context, asset.getString("id"), side, true);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, MediaAssets.CLASSIFIER_QUALITY, out);
             bitmap.recycle();
             image = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
         } catch (Exception e) {

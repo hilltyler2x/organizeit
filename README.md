@@ -72,7 +72,9 @@ full-price months sort up to `MONTHLY_SORT_LIMIT` (default 0, no limit).
 1. **Add photos.** The browser photo picker opens the Photos library on iPhone and Android
    (multi-select), or pick files / a whole folder on a computer, or drag and drop.
    Originals stay on the device in IndexedDB.
-2. **Sort.** Each photo is shrunk to a ~768px JPEG. The app sends them six at a time to
+2. **Sort.** Each photo is sent as a full-quality JPEG (quality 0.92) as large as Claude can
+   read: up to 2576px on the long side and ~3.6 MP in all (`src/lib/quality.ts`; videos as a
+   1920px grid of six frames). The app sends them four at a time to
    `POST /api/classify-batch`, with four requests in flight, so one AI call sorts several
    photos (the phone's background sorter uses the one-photo `POST /api/classify`). The
    server asks Claude (`claude-opus-5-5`, low effort, JSON output) to choose a section

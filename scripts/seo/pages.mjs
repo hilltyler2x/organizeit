@@ -77,7 +77,7 @@ export const pages = [
     ],
     faq: [
       ["Is OrganizeIt an expense tracker?", "No. It doesn't total amounts or file tax returns. It finds and gathers the receipts that are buried in your camera roll, so they are ready to hand to whatever expense app or accountant you use."],
-      ["Are my receipts uploaded?", "Your photos stay on your phone. A small low-resolution preview is sent to be sorted and is not kept. See the privacy policy for details."],
+      ["Are my receipts uploaded?", "Your photos stay on your phone. A high-quality copy is sent to be sorted and is not kept. See the privacy policy for details."],
     ],
   },
   {

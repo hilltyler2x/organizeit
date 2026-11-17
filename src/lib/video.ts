@@ -18,8 +18,11 @@ export const FRAME_POINTS = [1, 3, 5, 7, 9, 11].map((n) => n / 12);
 export const BLANK_SPREAD = 10;
 /** Black lines between frames, so the AI reads them as separate pictures. */
 export const GUTTER = 6;
-/** Longest side of a video's frame grid for the classifier. Photos go at 768px. */
-export const VIDEO_SHEET_SIDE = 1152;
+/**
+ * Longest side of a video's frame grid for the classifier. The grid comes out near square, and
+ * 1920×1920 is about as many pixels as the AI reads in one image (see quality.ts).
+ */
+export const VIDEO_SHEET_SIDE = 1920;
 
 /**
  * How six frames of a `width`×`height` video sit in a grid no bigger than `maxSide`. Tall

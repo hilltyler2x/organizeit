@@ -594,10 +594,11 @@ public final class BackgroundSorter {
     /// The /api/classify request for one photo or video, with its body.
     func classifyRequest(_ asset: PHAsset, config: BackgroundSortConfig, categories: [CategoryName], download: Bool) async -> Result<URLRequest, SortError> {
         let isVideo = asset.mediaType == .video
-        // A video is sent as six frames from across it in one larger grid image.
+        // Full quality, as large as the AI can see. A video is sent as six frames from across it
+        // in one grid image.
         let picture = isVideo
-            ? await VideoFrames.sheet(for: asset, maxSide: VideoFrames.sheetSide, quality: 0.82, download: download)?.0
-            : await image(asset, maxSide: 768, quality: 0.8, download: download)
+            ? await VideoFrames.sheet(for: asset, maxSide: VideoFrames.sheetSide, quality: VideoFrames.classifierQuality, download: download)?.0
+            : await image(asset, maxSide: VideoFrames.classifierSide(width: asset.pixelWidth, height: asset.pixelHeight), quality: VideoFrames.classifierQuality, download: download)
         guard let jpeg = picture else { return .failure(.skip) }
         let info = DeviceAsset(asset)
         var body: [String: Any] = [

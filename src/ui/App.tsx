@@ -15,7 +15,7 @@ import { Toaster } from "./PhotoMenu";
 import { ReviewView } from "./ReviewView";
 import { Thumb } from "./Thumb";
 
-type View = { kind: "overview" } | { kind: "review" } | { kind: "duplicates" } | { kind: "category"; id: string };
+type View = { kind: "overview" } | { kind: "pro" } | { kind: "review" } | { kind: "duplicates" } | { kind: "category"; id: string };
 
 export function App() {
   const lib = useLibrary();
@@ -114,6 +114,13 @@ export function App() {
               </div>
             );
           })}
+          {lib.native && canBuy && (
+            <div className="nav-section">
+              <button className={`nav-item ${view.kind === "pro" ? "active" : ""}`} onClick={() => open({ kind: "pro" })}>
+                <span>OrganizeIt Pro</span>
+              </button>
+            </div>
+          )}
           {canRate && (
             <div className="nav-section">
               <button className="nav-item" onClick={() => { setMenuOpen(false); rateApp().catch(() => {}); }}>
@@ -127,6 +134,8 @@ export function App() {
         <main ref={mainRef}>
           {!lib.ready || (lib.native && lib.permission === null) ? (
             <p className="muted">Loading your library…</p>
+          ) : view.kind === "pro" ? (
+            <ProPage lib={lib} onDone={() => open({ kind: "overview" })} />
           ) : !lib.aiConsent ? (
             <AiConsent lib={lib} />
           ) : lib.native && lib.permission !== "granted" && lib.permission !== "limited" ? (
@@ -305,8 +314,11 @@ function ConnectLibrary({ lib }: { lib: Library }) {
       </p>
       {denied ? (
         <>
-          <button className="primary big" onClick={lib.openSettings}>Open Settings</button>
-          <p className="muted small">In Settings, tap Photos and choose Full Access (iPhone) or Allow all (Android).</p>
+          <p className="muted">
+            Sorting needs access to your photos, so nothing is sorted for now. If you change your mind, you can turn it on in
+            Settings: tap Photos and choose Full Access or Limited Access (iPhone), or Allow (Android).
+          </p>
+          <button className="big" onClick={lib.openSettings}>Open Settings</button>
         </>
       ) : (
         <>
@@ -459,9 +471,48 @@ function PaywallReminder({ lib }: { lib: Library }) {
   );
 }
 
+/**
+ * OrganizeIt Pro, reachable from the menu at any time, even before the person has agreed to
+ * sorting or given Photos access (App Review needs to find the purchase).
+ */
+function ProPage({ lib, onDone }: { lib: Library; onDone: () => void }) {
+  const p = lib.plan;
+  if (p?.active) {
+    return (
+      <div className="overview">
+        <div className="queue-row paywall">
+          <strong>You have OrganizeIt Pro</strong>
+          <p className="muted small">
+            {p.limit > 0
+              ? `${p.intro ? "First month" : "This month"}: ${p.used.toLocaleString()} of ${p.limit.toLocaleString()} photos sorted.`
+              : "Your whole library and every new photo are sorted."}{" "}
+            Manage or cancel it in Settings → your name → Subscriptions.
+          </p>
+          <button className="link small" onClick={onDone}>Done</button>
+        </div>
+      </div>
+    );
+  }
+  const free = p && p.freeLimit > 0 ? ` The first ${p.freeLimit} photos are free.` : "";
+  return (
+    <div className="overview">
+      <Paywall
+        lib={lib}
+        reason="subscribe"
+        message={`Pro sorts your whole photo library and keeps sorting every new photo you take.${free}`}
+        onDismiss={onDone}
+      />
+    </div>
+  );
+}
+
 /** Sorting is paused until the person subscribes (or, in the $2 month, until it renews). */
-function Paywall({ lib }: { lib: Library }) {
-  const reason = lib.paywall!.reason;
+function Paywall({ lib, reason = lib.paywall!.reason, message = lib.paywall!.message, onDismiss = () => lib.hidePaywall(true) }: {
+  lib: Library;
+  reason?: "subscribe" | "limit";
+  message?: string;
+  onDismiss?: () => void;
+}) {
   const [offer, setOffer] = useState<Offer | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "busy" | "unavailable">("loading");
   const [problem, setProblem] = useState<string | null>(null);
@@ -505,16 +556,16 @@ function Paywall({ lib }: { lib: Library }) {
     return (
       <div className="queue-row paywall">
         <strong>Sorting is paused for this month.</strong>
-        <p className="muted small">{lib.paywall!.message}</p>
-        <button className="link small" onClick={() => lib.hidePaywall(true)}>OK</button>
+        <p className="muted small">{message}</p>
+        <button className="link small" onClick={onDismiss}>OK</button>
       </div>
     );
   }
 
   return (
     <div className="queue-row paywall">
-      <strong>Keep OrganizeIt sorting</strong>
-      <p className="muted small">{lib.paywall!.message}</p>
+      <strong>{lib.paywall ? "Keep OrganizeIt sorting" : "OrganizeIt Pro"}</strong>
+      <p className="muted small">{message}</p>
       {offer && (
         <p>
           {offer.introPrice ? (
@@ -555,7 +606,7 @@ function Paywall({ lib }: { lib: Library }) {
         </p>
       )}
       <div className="row">
-        <button className="link small" disabled={state === "busy"} onClick={() => lib.hidePaywall(true)}>Not now</button>
+        <button className="link small" disabled={state === "busy"} onClick={onDismiss}>Not now</button>
         {!usePasscode && <button className="link small" onClick={() => setUsePasscode(true)}>Have a passcode?</button>}
       </div>
       {usePasscode && <PasscodeForm lib={lib} />}

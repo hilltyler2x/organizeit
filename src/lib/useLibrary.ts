@@ -608,8 +608,9 @@ export function useLibrary() {
   const connectLibrary = useCallback(async () => {
     const { status } = await PhotoLibrary.requestPermission();
     setPermission(status);
+    // After "Don't Allow" the app only explains how to turn access on; it never opens Settings by
+    // itself (App Store guideline 5.1.1(iv)).
     if (status === "granted" || status === "limited") await scanDevice();
-    else if (status === "denied") await PhotoLibrary.openSettings();
   }, [scanDevice]);
 
   // With "Limited" (iPhone) or "Selected photos" (Android 14+) access the app only sees part of

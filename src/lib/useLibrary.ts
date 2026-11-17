@@ -62,27 +62,32 @@ function rememberAskedForVideos() {
     // Private storage unavailable: asked again next time, which is harmless.
   }
 }
-// The person has agreed that previews of their photos may be sent to Anthropic's AI to be
-// sorted. Nothing leaves the phone until they have (App Store guideline 5.1.1).
+// The person has agreed that copies of their photos may be sent to Anthropic's AI to be
+// sorted. Nothing leaves the phone until they have (App Store guideline 5.1.1). The stored
+// value is the version of the wording they agreed to: "2" since copies went from small
+// previews to full quality, so anyone who agreed to "1" is asked again.
 const AI_CONSENT_KEY = "organizeit.aiConsent";
+const AI_CONSENT_VERSION = "2";
 function hadAiConsent(): boolean {
   try {
-    return localStorage.getItem(AI_CONSENT_KEY) === "1";
+    return localStorage.getItem(AI_CONSENT_KEY) === AI_CONSENT_VERSION;
   } catch {
     return false;
   }
 }
 function rememberAiConsent() {
   try {
-    localStorage.setItem(AI_CONSENT_KEY, "1");
+    localStorage.setItem(AI_CONSENT_KEY, AI_CONSENT_VERSION);
   } catch {
     // Private storage unavailable: the person is asked again next time.
   }
 }
 // Optional cap while testing: only the newest N photos on the phone are sorted.
 export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
-// Photos go to the server several at a time, with a few requests in flight at once.
-const BATCH_SIZE = 6;
+// Photos go to the server several at a time, with a few requests in flight at once. Each photo
+// is a full-quality picture of up to ~3.6 MP (quality.ts), so four per request keeps a request
+// around 5-15 MB.
+const BATCH_SIZE = 4;
 const CONCURRENCY = 4;
 // Duplicate fingerprints are worked out a chunk of photos at a time, alongside sorting.
 const HASH_CHUNK = 40;

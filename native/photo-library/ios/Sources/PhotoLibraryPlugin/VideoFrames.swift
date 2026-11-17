@@ -10,8 +10,23 @@ enum VideoFrames {
     /// Where frames are taken from, as a share of the video's length: the middle of six equal
     /// parts, skipping the very start and end.
     static let points: [Double] = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0].map { $0 / 12.0 }
-    /// Longest side of the frame grid sent to the classifier. Photos go at 768.
-    static let sheetSide: CGFloat = 1152
+    /// Longest side of the frame grid sent to the classifier. The grid is near square, and
+    /// 1920×1920 is about as many pixels as the AI reads in one image. Matches src/lib/video.ts.
+    static let sheetSide: CGFloat = 1920
+    /// Longest side the AI reads, and the pixel budget per photo (a little under its ~3.75 MP).
+    /// Matches src/lib/quality.ts.
+    static let classifierMaxSide: CGFloat = 2576
+    static let classifierMaxPixels: CGFloat = 3_600_000
+    /// JPEG quality of the copy sent to the AI.
+    static let classifierQuality: CGFloat = 0.92
+
+    /// The longest side to send a `width`×`height` photo at, as large as the AI can use.
+    static func classifierSide(width: Int, height: Int) -> CGFloat {
+        guard width > 0, height > 0 else { return classifierMaxPixels.squareRoot().rounded(.down) }
+        let long = CGFloat(max(width, height))
+        let byPixels = (long * (classifierMaxPixels / (CGFloat(width) * CGFloat(height))).squareRoot()).rounded(.down)
+        return min(classifierMaxSide, byPixels)
+    }
     /// Black lines between frames, so the AI reads them as separate pictures.
     static let gutter: CGFloat = 6
     /// A frame whose brightness varies less than this (0-255) is blank and swapped for a later one.

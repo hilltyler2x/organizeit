@@ -220,7 +220,7 @@ function Overview({ lib, usage, duplicates, onOpen, onReview, onDuplicates, onAd
             <button className="primary big" onClick={() => onAdd()}>Add photos &amp; videos</button>
             <button className="big hide-small" onClick={() => onAdd(true)}>Add a folder</button>
           </div>
-          <p className="muted small">On iPhone or Android, "Add photos &amp; videos" opens your Photos library. Everything stays on this device; only a small preview is sent for sorting (a few still frames for a video).</p>
+          <p className="muted small">On iPhone or Android, "Add photos &amp; videos" opens your Photos library. Everything stays on this device; only a high-quality copy of each photo is sent for sorting (six still frames for a video), and it isn't kept.</p>
         </div>
       ) : (
         <>
@@ -276,8 +276,8 @@ function AiConsent({ lib }: { lib: Library }) {
       </p>
       <ul className="consent-list">
         <li>
-          <strong>What is sent:</strong> a small, low-resolution preview of each photo (for a video, a few still frames),
-          with its file name and size.
+          <strong>What is sent:</strong> a high-quality copy of each photo, sized to the most detail the AI can see (for
+          a video, six still frames in one image), with its file name and size.
         </li>
         <li>
           <strong>Who receives it:</strong> the OrganizeIt server, which passes it to Anthropic to choose a category.
@@ -286,7 +286,7 @@ function AiConsent({ lib }: { lib: Library }) {
           <strong>What happens to it:</strong> it is used only to sort that photo. It isn't kept, sold or shared with anyone
           else, and Anthropic doesn't use it to train its AI.
         </li>
-        <li>Your full-size photos stay on your {lib.native ? "phone" : "device"}.</li>
+        <li>Your original, full-size photos stay on your {lib.native ? "phone" : "device"}.</li>
       </ul>
       <p className="muted small">
         Details are in the <a href={`${API}/privacy.html`} target="_blank" rel="noreferrer">privacy policy</a>.

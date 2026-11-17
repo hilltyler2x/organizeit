@@ -33,8 +33,23 @@ final class MediaAssets {
      * parts, skipping the very start and end. Matches src/lib/video.ts.
      */
     private static final double[] FRAME_POINTS = { 1 / 12.0, 3 / 12.0, 5 / 12.0, 7 / 12.0, 9 / 12.0, 11 / 12.0 };
-    /** Longest side of the frame grid sent to the classifier. Photos go at 768. */
-    static final int SHEET_SIDE = 1152;
+    /**
+     * Longest side of the frame grid sent to the classifier. The grid is near square, and
+     * 1920x1920 is about as many pixels as the AI reads in one image. Matches src/lib/video.ts.
+     */
+    static final int SHEET_SIDE = 1920;
+    /** Longest side the AI reads, and the pixel budget per photo. Matches src/lib/quality.ts. */
+    static final int CLASSIFIER_MAX_SIDE = 2576;
+    static final double CLASSIFIER_MAX_PIXELS = 3_600_000;
+    /** JPEG quality (0-100) of the copy sent to the AI. */
+    static final int CLASSIFIER_QUALITY = 92;
+
+    /** The longest side to send a width x height photo at, as large as the AI can use. */
+    static int classifierSide(int width, int height) {
+        if (width <= 0 || height <= 0) return (int) Math.floor(Math.sqrt(CLASSIFIER_MAX_PIXELS));
+        double byPixels = Math.floor(Math.max(width, height) * Math.sqrt(CLASSIFIER_MAX_PIXELS / ((double) width * height)));
+        return (int) Math.min(CLASSIFIER_MAX_SIDE, byPixels);
+    }
     /** Black lines between frames, so the AI reads them as separate pictures. */
     private static final int GUTTER = 6;
     /** A frame whose brightness varies less than this (0-255) is blank and swapped for a later one. */

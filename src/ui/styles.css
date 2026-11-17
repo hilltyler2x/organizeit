@@ -391,3 +391,8 @@ button.dupe-badge { border: none; min-height: 28px; padding: 4px 10px; cursor: p
 .inspector-dots span.on.keep { background: var(--accent); }
 .inspector-dots span.on.delete { background: var(--danger); }
 .inspector-actions button.danger { background: var(--danger); color: #fff; border-color: transparent; }
+
+/* AI consent screen, shown before any photo is sent to be sorted. */
+.consent-list { text-align: left; margin: 0.5rem auto 1rem; padding-left: 1.2rem; max-width: 34rem; line-height: 1.45; }
+.consent-list li { margin-bottom: 0.5rem; }
+.consent button.link { display: block; margin: 0.9rem auto 0; }

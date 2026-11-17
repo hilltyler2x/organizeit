@@ -62,6 +62,23 @@ function rememberAskedForVideos() {
     // Private storage unavailable: asked again next time, which is harmless.
   }
 }
+// The person has agreed that previews of their photos may be sent to Anthropic's AI to be
+// sorted. Nothing leaves the phone until they have (App Store guideline 5.1.1).
+const AI_CONSENT_KEY = "organizeit.aiConsent";
+function hadAiConsent(): boolean {
+  try {
+    return localStorage.getItem(AI_CONSENT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function rememberAiConsent() {
+  try {
+    localStorage.setItem(AI_CONSENT_KEY, "1");
+  } catch {
+    // Private storage unavailable: the person is asked again next time.
+  }
+}
 // Optional cap while testing: only the newest N photos on the phone are sorted.
 export const SORT_LIMIT = Number(import.meta.env.VITE_SORT_LIMIT) || 0;
 // Photos go to the server several at a time, with a few requests in flight at once.
@@ -92,6 +109,7 @@ export function useLibrary() {
   const [paywallHidden, setPaywallHidden] = useState(false);
   // Inside the iOS/Android app: photo library permission and scan progress.
   const [permission, setPermission] = useState<PermissionStatus | null>(null);
+  const [aiConsent, setAiConsent] = useState(hadAiConsent);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const [background, setBackground] = useState<BackgroundSortStatus | null>(null);
   const stateRef = useRef(state);
@@ -461,7 +479,7 @@ export function useLibrary() {
   // Work through the queue newest first, a batch of photos per request and a few requests
   // at a time.
   const pump = useCallback(() => {
-    if (!ai || locked || paywall || !userReady || scanning.current) return;
+    if (!aiConsent || !ai || locked || paywall || !userReady || scanning.current) return;
     const free = CONCURRENCY - batches.current;
     if (free <= 0) return;
     const queued = stateRef.current.photos
@@ -478,7 +496,7 @@ export function useLibrary() {
         pump();
       });
     }
-  }, [ai, locked, paywall, userReady, classifyGroup]);
+  }, [aiConsent, ai, locked, paywall, userReady, classifyGroup]);
 
   // Once the queue is empty, the next round of sorting starts its progress from zero. A big
   // round finishing is a good moment to ask for a review.
@@ -562,7 +580,7 @@ export function useLibrary() {
   // app is being closed.
   const syncBackground = useCallback(() => {
     // Without the phone's id the server can't tell the owner's phone from any other.
-    if (!isNativeApp || !API || !scanned.current || !currentUserId()) return;
+    if (!isNativeApp || !API || !scanned.current || !currentUserId() || !hadAiConsent()) return;
     const s = stateRef.current;
     BackgroundSort.configure({
       apiUrl: API,
@@ -750,6 +768,12 @@ export function useLibrary() {
     sortedThisRun,
     background,
     connectLibrary,
+    /** Whether the person has agreed to send photo previews to the AI that sorts them. */
+    aiConsent,
+    giveAiConsent: () => {
+      rememberAiConsent();
+      setAiConsent(true);
+    },
     openSettings: () => PhotoLibrary.openSettings(),
     allowFullAccess,
     unlock: async (code: string) => {
